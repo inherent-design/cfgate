@@ -4,77 +4,63 @@ on:
   push:
     branches: [main]
     paths:
-      - 'cmd/**'
-      - 'api/**'
-      - 'internal/**'
-      - 'go.mod'
-      - 'go.sum'
-      - '.github/workflows/ci.yml'
+      - "cmd/**"
+      - "api/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
-  GO_VERSION: '1.25'
+  GOLANGCI_VERSION: "v2.8.0"
+  ENVTEST_K8S_VERSION: "1.35.0"
 
 jobs:
   lint:
-    name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - uses: golangci/golangci-lint-action@v6
+          go-version-file: "go.mod"
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.8.0
+          version: ${{ env.GOLANGCI_VERSION }}
 
   test:
-    name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Install controller-gen
-        run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
-
+          go-version-file: "go.mod"
       - name: Generate
         run: |
+          go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
           controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
           controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
-
-      - name: Install envtest
-        run: go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23
-
-      - name: Run unit tests
+      - name: Test
         run: |
-          KUBEBUILDER_ASSETS="$(setup-envtest use 1.35.0 --bin-dir /tmp/envtest -p path)" \
+          go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23
+          KUBEBUILDER_ASSETS="$(setup-envtest use ${{ env.ENVTEST_K8S_VERSION }} --bin-dir /tmp/envtest -p path)" \
             go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
-
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v5
         with:
           files: cover.out
           fail_ci_if_error: false
 
   build:
-    name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Build binary
-        run: CGO_ENABLED=0 go build -o bin/manager ./cmd/manager
-
-      - name: Build Docker image
-        run: docker build -t cfgate:ci .
+          go-version-file: "go.mod"
+      - run: CGO_ENABLED=0 go build -o bin/manager ./cmd/manager
+      - run: docker build -t cfgate:ci .
