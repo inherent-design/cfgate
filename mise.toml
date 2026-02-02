@@ -10,7 +10,6 @@ REGISTRY = "ghcr.io/inherent-design/cfgate"
 
 # Test configuration
 E2E_USE_EXISTING_CLUSTER = "true"
-ENVTEST_K8S_VERSION = "1.35.0"
 
 [tools]
 go = "1.25"
@@ -49,19 +48,9 @@ run = "go fmt ./... && go vet ./..."
 #
 
 [tasks.test]
-alias = "t"
-description = "Run unit tests (excludes e2e)"
-depends = ["generate"]
-run = """
-go install sigs.k8s.io/controller-runtime/tools/setup-envtest@release-0.23
-KUBEBUILDER_ASSETS="$(setup-envtest use ${ENVTEST_K8S_VERSION} --bin-dir /tmp/envtest -p path)" \
-  go test $(go list ./... | grep -v /e2e) -coverprofile cover.out
-"""
-
-[tasks.e2e]
-alias = "e"
-description = "Run e2e tests (requires cluster + Cloudflare creds)"
-run = "go test ./test/e2e/... -v -timeout 30m"
+alias = ["t", "e2e", "e"]
+description = "Run all tests (requires cluster + Cloudflare creds)"
+run = "go test ./... -v -timeout 30m"
 
 #
 # Build

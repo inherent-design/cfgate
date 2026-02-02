@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	cloudflare "github.com/cloudflare/cloudflare-go/v6"
@@ -133,42 +132,6 @@ func createTunnelInCloudflare(ctx context.Context, cfClient *cloudflare.Client, 
 	}, nil
 }
 
-// deleteTunnelFromCloudflare deletes a tunnel from Cloudflare.
-func deleteTunnelFromCloudflare(ctx context.Context, cfClient *cloudflare.Client, accountID, tunnelID string) error {
-	_, _ = cfClient.ZeroTrust.Tunnels.Cloudflared.Connections.Delete(ctx, tunnelID, zero_trust.TunnelCloudflaredConnectionDeleteParams{
-		AccountID: cloudflare.F(accountID),
-	})
-
-	_, err := cfClient.ZeroTrust.Tunnels.Cloudflared.Delete(ctx, tunnelID, zero_trust.TunnelCloudflaredDeleteParams{
-		AccountID: cloudflare.F(accountID),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
-			return nil
-		}
-		return fmt.Errorf("failed to delete tunnel: %w", err)
-	}
-	return nil
-}
-
-// cleanupTunnel deletes a tunnel from Cloudflare. Uses fresh client.
-func cleanupTunnel(ctx context.Context, _ *cloudflare.Client, accountID, tunnelName string) {
-	client := getCloudflareClient()
-	tunnel, err := getTunnelFromCloudflare(ctx, client, accountID, tunnelName)
-	if err != nil {
-		fmt.Fprintf(GinkgoWriter, "[CLEANUP] Error finding %q: %v\n", tunnelName, err)
-		return
-	}
-	if tunnel == nil {
-		fmt.Fprintf(GinkgoWriter, "[CLEANUP] Tunnel %q not found\n", tunnelName)
-		return
-	}
-	fmt.Fprintf(GinkgoWriter, "[CLEANUP] Deleting %q (ID: %s)\n", tunnelName, tunnel.ID)
-	if err := deleteTunnelFromCloudflare(ctx, client, accountID, tunnel.ID); err != nil {
-		fmt.Fprintf(GinkgoWriter, "[CLEANUP] Delete error: %v\n", err)
-	}
-}
-
 // waitForTunnelReady waits for a CloudflareTunnel to have Ready=True condition.
 func waitForTunnelReady(ctx context.Context, k8sClient client.Client, name, namespace string, timeout time.Duration) *cfgatev1alpha1.CloudflareTunnel {
 	var tunnel cfgatev1alpha1.CloudflareTunnel
@@ -205,21 +168,6 @@ func waitForTunnelCondition(ctx context.Context, k8sClient client.Client, name, 
 		}
 		return false
 	}, timeout, DefaultInterval).Should(BeTrue(), fmt.Sprintf("Tunnel condition %s did not become %s", conditionType, status))
-
-	return &tunnel
-}
-
-// waitForTunnelIDInStatus waits for the tunnel ID to be populated in status.
-func waitForTunnelIDInStatus(ctx context.Context, k8sClient client.Client, name, namespace string, timeout time.Duration) *cfgatev1alpha1.CloudflareTunnel {
-	var tunnel cfgatev1alpha1.CloudflareTunnel
-
-	Eventually(func() bool {
-		err := k8sClient.Get(ctx, client.ObjectKey{Name: name, Namespace: namespace}, &tunnel)
-		if err != nil {
-			return false
-		}
-		return tunnel.Status.TunnelID != ""
-	}, timeout, DefaultInterval).Should(BeTrue(), "Tunnel ID not populated in status")
 
 	return &tunnel
 }
@@ -294,37 +242,6 @@ func getDNSRecordFromCloudflare(ctx context.Context, cfClient *cloudflare.Client
 	}
 
 	return nil, nil // Not found.
-}
-
-// deleteDNSRecordFromCloudflare deletes a DNS record from Cloudflare.
-func deleteDNSRecordFromCloudflare(ctx context.Context, cfClient *cloudflare.Client, zoneID, recordID string) error {
-	_, err := cfClient.DNS.Records.Delete(ctx, recordID, dns.RecordDeleteParams{
-		ZoneID: cloudflare.F(zoneID),
-	})
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
-			return nil
-		}
-		return fmt.Errorf("failed to delete DNS record: %w", err)
-	}
-	return nil
-}
-
-// cleanupDNSRecord attempts to delete a DNS record from Cloudflare, ignoring errors.
-func cleanupDNSRecord(ctx context.Context, cfClient *cloudflare.Client, zoneID, hostname, recordType string) {
-	record, err := getDNSRecordFromCloudflare(ctx, cfClient, zoneID, hostname, recordType)
-	if err != nil {
-		GinkgoWriter.Printf("Warning: failed to get DNS record for cleanup: %v\n", err)
-		return
-	}
-	if record == nil {
-		return
-	}
-
-	err = deleteDNSRecordFromCloudflare(ctx, cfClient, zoneID, record.ID)
-	if err != nil {
-		GinkgoWriter.Printf("Warning: failed to delete DNS record during cleanup: %v\n", err)
-	}
 }
 
 // getZoneIDByName gets the zone ID for a zone name.
