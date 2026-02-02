@@ -7,11 +7,22 @@ on:
       - "cmd/**"
       - "api/**"
       - "internal/**"
+      - "config/**"
       - "go.mod"
       - "go.sum"
+      - "Dockerfile"
       - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
+    paths:
+      - "cmd/**"
+      - "api/**"
+      - "internal/**"
+      - "config/**"
+      - "go.mod"
+      - "go.sum"
+      - "Dockerfile"
+      - ".github/workflows/ci.yml"
   workflow_dispatch:
 
 permissions:
