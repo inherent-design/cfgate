@@ -1,0 +1,65 @@
+name: E2E Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'cmd/**'
+      - 'api/**'
+      - 'internal/**'
+      - 'test/e2e/**'
+      - 'go.mod'
+      - 'go.sum'
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.25'
+  CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+  CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+  CLOUDFLARE_ZONE_NAME: ${{ secrets.CLOUDFLARE_ZONE_NAME }}
+
+jobs:
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install kind
+        run: |
+          curl -Lo ./kind https://kind.sigs.k8s.io/dl/v0.31.0/kind-linux-amd64
+          chmod +x ./kind
+          sudo mv ./kind /usr/local/bin/kind
+
+      - name: Create cluster
+        run: kind create cluster --name cfgate-e2e --wait 5m
+
+      - name: Install Gateway API CRDs
+        run: kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+
+      - name: Install controller-gen
+        run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
+
+      - name: Generate manifests
+        run: |
+          controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+          controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+
+      - name: Build and load image
+        run: |
+          docker build -t cfgate:e2e .
+          kind load docker-image cfgate:e2e --name cfgate-e2e
+
+      - name: Install CRDs
+        run: kubectl apply -f config/crd/bases/
+
+      - name: Run e2e tests
+        run: go test ./test/e2e/... -v -timeout 30m
+
+      - name: Cleanup
+        if: always()
+        run: kind delete cluster --name cfgate-e2e

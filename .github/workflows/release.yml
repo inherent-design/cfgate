@@ -13,6 +13,7 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  GO_VERSION: '1.25'
 
 jobs:
   release:
@@ -27,9 +28,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: jdx/mise-action@v2
+      - uses: actions/setup-go@v5
         with:
-          install: true
+          go-version: ${{ env.GO_VERSION }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -66,8 +67,21 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin/
+
+      - name: Install controller-gen
+        run: go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.20.0
+
       - name: Generate release manifests
-        run: mise run release:manifests
+        run: |
+          controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
+          controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+          mkdir -p dist
+          cp config/crd/bases/*.yaml dist/
+          kustomize build config/default > dist/install.yaml
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
