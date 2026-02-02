@@ -61,6 +61,10 @@ jobs:
           controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:artifacts:config=config/crd/bases
           curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
           sudo mv kustomize /usr/local/bin/
+          # Set image tag to release version (strips 'v' prefix: v0.1.0 -> 0.1.0)
+          cd config/default
+          kustomize edit set image controller=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${GITHUB_REF_NAME#v}
+          cd ../..
           mkdir -p dist
           cp config/crd/bases/*.yaml dist/
           kustomize build config/default > dist/install.yaml
