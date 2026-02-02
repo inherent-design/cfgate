@@ -17,7 +17,7 @@ go = "1.25"
 "aqua:kubernetes-sigs/kind" = "0.31.0"
 "aqua:kubernetes/kubernetes/kubectl" = "1.35.0"
 "aqua:kubernetes-sigs/kustomize" = "5.8.0"
-"aqua:golangci/golangci-lint" = "1.63.4"
+"aqua:golangci/golangci-lint" = "2.8.0"
 "github:kubernetes-sigs/controller-tools[exe=controller-gen]" = "0.20.0"
 
 #
