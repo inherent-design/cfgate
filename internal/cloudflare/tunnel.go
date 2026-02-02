@@ -90,6 +90,7 @@ func (s *TunnelService) Delete(ctx context.Context, accountID, tunnelID string) 
 }
 
 // IsHealthy checks if a tunnel has healthy connections.
+// Health is determined by the tunnel's status field, which reflects connection state.
 func (s *TunnelService) IsHealthy(ctx context.Context, accountID, tunnelID string) (bool, error) {
 	tunnel, err := s.client.GetTunnel(ctx, accountID, tunnelID)
 	if err != nil {
@@ -100,14 +101,6 @@ func (s *TunnelService) IsHealthy(ctx context.Context, accountID, tunnelID strin
 		return false, nil
 	}
 
-	// Check if there are any active connections
-	for _, conn := range tunnel.Connections {
-		if !conn.IsPendingReconnect {
-			return true, nil
-		}
-	}
-
-	// Also consider status
 	return tunnel.Status == "healthy" || tunnel.Status == "active", nil
 }
 

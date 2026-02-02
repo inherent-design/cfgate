@@ -86,24 +86,6 @@ type Tunnel struct {
 
 	// CreatedAt is the tunnel creation timestamp.
 	CreatedAt string
-
-	// Connections contains active connector information.
-	Connections []TunnelConnection
-}
-
-// TunnelConnection represents an active cloudflared connection.
-type TunnelConnection struct {
-	// ID is the connection ID.
-	ID string
-
-	// ClientID is the cloudflared client ID.
-	ClientID string
-
-	// ClientVersion is the cloudflared version.
-	ClientVersion string
-
-	// IsPendingReconnect indicates if the connection is reconnecting.
-	IsPendingReconnect bool
 }
 
 // CreateTunnelParams contains parameters for creating a tunnel.

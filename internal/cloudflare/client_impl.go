@@ -437,24 +437,13 @@ func tunnelFromAPI(t *zero_trust.CloudflareTunnel) *Tunnel {
 		return nil
 	}
 
-	tunnel := &Tunnel{
+	return &Tunnel{
 		ID:         t.ID,
 		Name:       t.Name,
 		Status:     string(t.Status),
 		AccountTag: t.AccountTag,
 		CreatedAt:  t.CreatedAt.String(),
 	}
-
-	for _, conn := range t.Connections {
-		tunnel.Connections = append(tunnel.Connections, TunnelConnection{
-			ID:                 conn.ID,
-			ClientID:           conn.ClientID,
-			ClientVersion:      conn.ClientVersion,
-			IsPendingReconnect: conn.IsPendingReconnect,
-		})
-	}
-
-	return tunnel
 }
 
 // ingressOriginRequestToAPI converts our OriginRequestConfig to the per-ingress API format.
