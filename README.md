@@ -25,7 +25,7 @@ API Token with permissions:
 ## Install
 
 ```bash
-kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.2.1/standard-install.yaml
+kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 kubectl apply -f https://github.com/inherent-design/cfgate/releases/latest/download/install.yaml
 ```
 
@@ -69,8 +69,7 @@ mise tasks
 |------|-------------|
 | `mise run generate` | Generate CRDs and DeepCopy |
 | `mise run lint` | Run golangci-lint |
-| `mise run test` | Run unit tests |
-| `mise run e2e` | Run e2e tests |
+| `mise run test` | Run all tests (e2e, requires Cloudflare creds) |
 | `mise run build` | Build binary |
 | `mise run docker:build` | Build container image |
 | `mise run deploy` | Deploy to current cluster |
@@ -79,10 +78,8 @@ mise tasks
 
 ```bash
 mise run cluster:create
-mise run docker:build
-kind load docker-image cfgate:local --name cfgate-test
 mise run deploy
-mise run e2e
+mise run test
 mise run cluster:delete
 ```
 
