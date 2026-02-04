@@ -1,19 +1,21 @@
 apiVersion: cfgate.io/v1alpha1
-kind: CloudflareDNSSync
+kind: CloudflareDNS
 metadata:
-  name: multi-dns
+  name: production-dns
   namespace: cfgate-system
 spec:
   tunnelRef:
-    name: multi-tunnel
+    name: production-tunnel
   zones:
-    - name: example.com  # <-- Replace with your domain
+    - name: example.com
+  policy: sync
   source:
     gatewayRoutes:
       enabled: true
+      annotationFilter: "cfgate.io/dns-sync=enabled"
   defaults:
     proxied: true
-    ttl: auto
+    ttl: 1
   ownership:
     txtRecord:
       enabled: true
@@ -21,4 +23,3 @@ spec:
   cleanupPolicy:
     deleteOnRouteRemoval: true
     deleteOnResourceRemoval: true
-    onlyManaged: true

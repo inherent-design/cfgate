@@ -3,4 +3,4 @@ kind: Kustomization
 
 resources:
   - tunnel.yaml
-  - dnssync.yaml
+  - dns.yaml

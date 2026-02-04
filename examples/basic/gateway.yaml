@@ -12,7 +12,6 @@ metadata:
   namespace: cfgate-system
   annotations:
     cfgate.io/tunnel-ref: cfgate-system/demo-tunnel
-    cfgate.io/dns-sync: enabled
 spec:
   gatewayClassName: cfgate
   listeners:

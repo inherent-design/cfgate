@@ -13,7 +13,7 @@ Expose Rancher 2.14+ via cfgate using Gateway API.
 
 ```bash
 # Edit tunnel.yaml: set accountId
-# Edit dnssync.yaml: set zones[].name to your domain
+# Edit dns.yaml: set zones[].name to your domain
 kubectl apply -k examples/with-rancher/cfgate
 ```
 
@@ -41,7 +41,7 @@ kubectl annotate gateway rancher-gateway -n cattle-system \
 
 ```bash
 kubectl get gateway rancher-gateway -n cattle-system
-kubectl get cloudflarednssyncs -n cfgate-system
+kubectl get cloudflarednses -n cfgate-system
 curl -I https://rancher.example.com
 ```
 

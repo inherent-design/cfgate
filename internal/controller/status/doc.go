@@ -3,8 +3,8 @@
 // It centralizes condition management logic to ensure consistent status handling
 // across all cfgate CRDs:
 //   - CloudflareTunnel
+//   - CloudflareDNS
 //   - CloudflareAccessPolicy
-//   - CloudflareDNSSync (deprecated)
 //
 // The package adapts patterns from Envoy Gateway for condition merging,
 // message formatting, and Gateway API PolicyStatus handling.

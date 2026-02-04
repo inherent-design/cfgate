@@ -1,28 +1,18 @@
-# Example CloudflareTunnel resource
 apiVersion: cfgate.io/v1alpha1
 kind: CloudflareTunnel
 metadata:
   name: production-tunnel
-  namespace: cloudflare-system
+  namespace: cfgate-system
 spec:
-  # Tunnel Identity - uses name for idempotent create/adopt
   tunnel:
-    name: "production-tunnel"
-
-  # Cloudflare Credentials
+    name: production-tunnel
   cloudflare:
-    accountId: "your-account-id-here"
+    accountId: "your-account-id"
     secretRef:
       name: cloudflare-credentials
-      namespace: cloudflare-system
-    secretKeys:
-      apiToken: CLOUDFLARE_API_TOKEN
-
-  # Cloudflared Deployment Configuration
   cloudflared:
     replicas: 2
     image: cloudflare/cloudflared:2025.4.0
-    imagePullPolicy: IfNotPresent
     protocol: auto
     resources:
       requests:
@@ -31,20 +21,10 @@ spec:
       limits:
         cpu: 500m
         memory: 256Mi
-    nodeSelector:
-      kubernetes.io/os: linux
-    podAnnotations:
-      prometheus.io/scrape: "true"
-      prometheus.io/port: "44483"
     metrics:
       enabled: true
       port: 44483
-
-  # Default Origin Settings
   originDefaults:
     connectTimeout: 30s
     noTLSVerify: false
-    http2Origin: false
-
-  # Fallback for unmatched requests
   fallbackTarget: http_status:404
