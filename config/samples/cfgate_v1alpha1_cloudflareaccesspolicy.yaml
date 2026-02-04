@@ -1,0 +1,30 @@
+apiVersion: cfgate.io/v1alpha1
+kind: CloudflareAccessPolicy
+metadata:
+  name: internal-apps
+  namespace: cfgate-system
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: admin-app
+  application:
+    name: Internal Application
+    domain: admin.example.com
+    sessionDuration: 24h
+    type: self_hosted
+  policies:
+    - name: allow-employees
+      decision: allow
+      include:
+        - emailDomain:
+            domain: company.com
+    - name: allow-ci
+      decision: non_identity
+      include:
+        - anyValidServiceToken: true
+  serviceTokens:
+    - name: ci-token
+      duration: 8760h
+      secretRef:
+        name: ci-access-token

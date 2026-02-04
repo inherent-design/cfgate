@@ -61,12 +61,13 @@ spec:
                 description: Cloudflare defines the Cloudflare API credentials.
                 properties:
                   accountId:
-                    description: AccountID is the Cloudflare Account ID. Required
-                      if accountName is not set.
+                    description: AccountID is the Cloudflare Account ID.
+                    maxLength: 32
                     type: string
                   accountName:
                     description: AccountName is the Cloudflare Account name. Will
                       be looked up via API.
+                    maxLength: 255
                     type: string
                   secretKeys:
                     description: SecretKeys defines the key mappings within the secret.
@@ -75,6 +76,7 @@ spec:
                         default: CLOUDFLARE_API_TOKEN
                         description: APIToken is the key name for the Cloudflare API
                           token.
+                        maxLength: 253
                         type: string
                     type: object
                   secretRef:
@@ -84,10 +86,13 @@ spec:
                     properties:
                       name:
                         description: Name of the secret.
+                        maxLength: 253
+                        minLength: 1
                         type: string
                       namespace:
                         description: Namespace of the secret. Defaults to the tunnel's
                           namespace.
+                        maxLength: 63
                         type: string
                     required:
                     - name
@@ -95,6 +100,9 @@ spec:
                 required:
                 - secretRef
                 type: object
+                x-kubernetes-validations:
+                - message: either accountId or accountName must be specified
+                  rule: has(self.accountId) || has(self.accountName)
               cloudflared:
                 description: Cloudflared defines the cloudflared deployment configuration.
                 properties:
@@ -102,10 +110,12 @@ spec:
                     description: ExtraArgs are additional arguments to pass to cloudflared.
                     items:
                       type: string
+                    maxItems: 20
                     type: array
                   image:
                     default: cloudflare/cloudflared:latest
                     description: Image is the cloudflared container image.
+                    maxLength: 255
                     type: string
                   imagePullPolicy:
                     default: IfNotPresent
@@ -127,6 +137,8 @@ spec:
                         default: 44483
                         description: Port is the port for the metrics endpoint.
                         format: int32
+                        maximum: 65535
+                        minimum: 1
                         type: integer
                     type: object
                   nodeSelector:
@@ -134,12 +146,14 @@ spec:
                       type: string
                     description: NodeSelector is a selector for nodes to run cloudflared
                       on.
+                    maxProperties: 50
                     type: object
                   podAnnotations:
                     additionalProperties:
                       type: string
                     description: PodAnnotations are annotations to add to cloudflared
                       pods.
+                    maxProperties: 50
                     type: object
                   protocol:
                     default: auto
@@ -256,6 +270,7 @@ spec:
                             If the operator is Exists, the value should be empty, otherwise just a regular string.
                           type: string
                       type: object
+                    maxItems: 20
                     type: array
                 type: object
               fallbackCredentialsRef:
@@ -267,10 +282,13 @@ spec:
                 properties:
                   name:
                     description: Name of the secret.
+                    maxLength: 253
+                    minLength: 1
                     type: string
                   namespace:
                     description: Namespace of the secret. Defaults to the resource's
                       namespace if empty.
+                    maxLength: 63
                     type: string
                 required:
                 - name
@@ -289,9 +307,12 @@ spec:
                       key:
                         default: ca.crt
                         description: Key is the key within the secret data.
+                        maxLength: 253
                         type: string
                       name:
                         description: Name of the secret.
+                        maxLength: 253
+                        minLength: 1
                         type: string
                     required:
                     - name
@@ -300,6 +321,7 @@ spec:
                     default: 30s
                     description: ConnectTimeout is the timeout for connecting to the
                       origin.
+                    pattern: ^[0-9]+(s|m|h)$
                     type: string
                   http2Origin:
                     default: false

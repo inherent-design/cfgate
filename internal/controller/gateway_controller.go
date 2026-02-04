@@ -19,17 +19,12 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
+	"cfgate.io/cfgate/internal/controller/annotations"
 )
 
 const (
 	// GatewayControllerName is the controller name for GatewayClass.
 	GatewayControllerName = "cfgate.io/cloudflare-tunnel-controller"
-
-	// AnnotationTunnelRef is the annotation key for tunnel reference.
-	AnnotationTunnelRef = "cfgate.io/tunnel-ref"
-
-	// AnnotationDNSSync is the annotation key for DNS sync mode.
-	AnnotationDNSSync = "cfgate.io/dns-sync"
 )
 
 // GatewayReconciler reconciles Gateway resources that reference CloudflareTunnel.
@@ -73,8 +68,8 @@ func (r *GatewayReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// 3. Validate tunnel reference annotation
-	tunnelRef, ok := gateway.Annotations[AnnotationTunnelRef]
-	if !ok {
+	tunnelRef := annotations.GetAnnotation(&gateway, annotations.AnnotationTunnelRef)
+	if tunnelRef == "" {
 		log.Info("Gateway has no tunnel reference annotation")
 		r.setGatewayCondition(&gateway, gwapiv1.GatewayConditionAccepted, metav1.ConditionFalse, "MissingTunnelRef", "cfgate.io/tunnel-ref annotation is required")
 		if err := r.Status().Update(ctx, &gateway); err != nil {
@@ -128,9 +123,9 @@ func (r *GatewayReconciler) isOurGatewayClass(ctx context.Context, gateway *gwap
 // resolveTunnelRef resolves the tunnel reference annotation to a CloudflareTunnel.
 // Returns the tunnel or an error if not found/invalid.
 func (r *GatewayReconciler) resolveTunnelRef(ctx context.Context, gateway *gwapiv1.Gateway) (*cfgatev1alpha1.CloudflareTunnel, error) {
-	tunnelRef, ok := gateway.Annotations[AnnotationTunnelRef]
-	if !ok {
-		return nil, fmt.Errorf("missing %s annotation", AnnotationTunnelRef)
+	tunnelRef := annotations.GetAnnotation(gateway, annotations.AnnotationTunnelRef)
+	if tunnelRef == "" {
+		return nil, fmt.Errorf("missing %s annotation", annotations.AnnotationTunnelRef)
 	}
 
 	parts := strings.Split(tunnelRef, "/")

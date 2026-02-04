@@ -7,7 +7,6 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - configmaps
   - secrets
   verbs:
   - create
@@ -48,7 +47,8 @@ rules:
 - apiGroups:
   - cfgate.io
   resources:
-  - cloudflarednssyncs
+  - cloudflareaccespolicies
+  - cloudflaredns
   - cloudflaretunnels
   verbs:
   - create
@@ -61,19 +61,29 @@ rules:
 - apiGroups:
   - cfgate.io
   resources:
-  - cloudflarednssyncs/finalizers
+  - cloudflareaccespolicies/finalizers
+  - cloudflaredns/finalizers
   - cloudflaretunnels/finalizers
   verbs:
   - update
 - apiGroups:
   - cfgate.io
   resources:
-  - cloudflarednssyncs/status
+  - cloudflareaccespolicies/status
+  - cloudflaredns/status
   - cloudflaretunnels/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - cfgate.io
+  resources:
+  - cloudflareaccesspolicies
+  verbs:
+  - get
+  - list
+  - watch
 - apiGroups:
   - coordination.k8s.io
   resources:
@@ -91,7 +101,9 @@ rules:
   resources:
   - gatewayclasses
   - gateways
+  - grpcroutes
   - httproutes
+  - referencegrants
   - tcproutes
   - udproutes
   verbs:

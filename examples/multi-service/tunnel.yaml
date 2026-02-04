@@ -7,7 +7,7 @@ spec:
   tunnel:
     name: multi-tunnel
   cloudflare:
-    accountId: "your-account-id"  # <-- Replace with your Cloudflare account ID
+    accountId: "your-account-id"
     secretRef:
       name: cloudflare-credentials
   cloudflared:

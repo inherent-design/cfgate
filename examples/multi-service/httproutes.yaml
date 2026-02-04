@@ -3,12 +3,14 @@ kind: HTTPRoute
 metadata:
   name: api
   namespace: demo
+  annotations:
+    cfgate.io/dns-sync: enabled
 spec:
   parentRefs:
     - name: cloudflare-tunnel
       namespace: cfgate-system
   hostnames:
-    - api.example.com  # <-- Replace with your subdomain
+    - api.example.com
   rules:
     - backendRefs:
         - name: api
@@ -19,13 +21,34 @@ kind: HTTPRoute
 metadata:
   name: web
   namespace: demo
+  annotations:
+    cfgate.io/dns-sync: enabled
 spec:
   parentRefs:
     - name: cloudflare-tunnel
       namespace: cfgate-system
   hostnames:
-    - web.example.com  # <-- Replace with your subdomain
+    - web.example.com
   rules:
     - backendRefs:
         - name: web
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: admin
+  namespace: demo
+  annotations:
+    cfgate.io/dns-sync: enabled
+    cfgate.io/access-policy: cfgate-system/admin-access
+spec:
+  parentRefs:
+    - name: cloudflare-tunnel
+      namespace: cfgate-system
+  hostnames:
+    - admin.example.com
+  rules:
+    - backendRefs:
+        - name: admin
           port: 80

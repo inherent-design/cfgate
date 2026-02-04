@@ -5,6 +5,6 @@ resources:
   - namespace.yaml
   - tunnel.yaml
   - gateway.yaml
-  - dnssync.yaml
+  - dns.yaml
   - echo-service.yaml
   - httproute.yaml

@@ -1,0 +1,24 @@
+apiVersion: cfgate.io/v1alpha1
+kind: CloudflareAccessPolicy
+metadata:
+  name: admin-access
+  namespace: cfgate-system
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: admin
+    namespace: demo
+  application:
+    name: Admin Dashboard
+    domain: admin.example.com
+    sessionDuration: 12h
+    type: self_hosted
+  policies:
+    - name: allow-admins
+      decision: allow
+      include:
+        - email:
+            email: admin@company.com
+        - emailDomain:
+            domain: company.com

@@ -98,12 +98,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err = (&controller.CloudflareDNSSyncReconciler{
+	if err = (&controller.CloudflareDNSReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("cloudflarednsync-controller"),
+		Recorder: mgr.GetEventRecorder("cloudflaredns-controller"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDNSSync")
+		setupLog.Error(err, "unable to create controller", "controller", "CloudflareDNS")
 		os.Exit(1)
 	}
 

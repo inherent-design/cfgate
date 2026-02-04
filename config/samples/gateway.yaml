@@ -1,78 +1,62 @@
-# Example GatewayClass and Gateway configuration for cfgate
----
 apiVersion: gateway.networking.k8s.io/v1
 kind: GatewayClass
 metadata:
-  name: cloudflare-tunnel
+  name: cfgate
 spec:
   controllerName: cfgate.io/cloudflare-tunnel-controller
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: production-gateway
-  namespace: apps
+  name: cloudflare-tunnel
+  namespace: cfgate-system
   annotations:
-    # Reference to CloudflareTunnel (required)
-    cfgate.io/tunnel-ref: cloudflare-system/production-tunnel
-    # DNS sync behavior
-    cfgate.io/dns-sync: "enabled"
+    cfgate.io/tunnel-ref: cfgate-system/production-tunnel
 spec:
-  gatewayClassName: cloudflare-tunnel
+  gatewayClassName: cfgate
   listeners:
-    # HTTP listener
     - name: http
       protocol: HTTP
       port: 80
       allowedRoutes:
         namespaces:
           from: All
-        kinds:
-          - kind: HTTPRoute
-
-    # HTTPS listener (TLS termination at Cloudflare edge)
-    - name: https
-      protocol: HTTPS
-      port: 443
-      hostname: "*.example.com"
-      allowedRoutes:
-        namespaces:
-          from: Selector
-          selector:
-            matchLabels:
-              gateway-access: production
-        kinds:
-          - kind: HTTPRoute
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
-  name: api-route
-  namespace: apps
+  name: public-app
+  namespace: default
   annotations:
-    cfgate.io/dns-sync: "enabled"
+    cfgate.io/dns-sync: enabled
 spec:
   parentRefs:
-    - name: production-gateway
-      namespace: apps
-      sectionName: https
+    - name: cloudflare-tunnel
+      namespace: cfgate-system
   hostnames:
-    - api.example.com
+    - app.example.com
   rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /v2
-      backendRefs:
-        - name: api-v2
-          port: 8080
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /v1
-      backendRefs:
-        - name: api-v1
-          port: 8080
     - backendRefs:
-        - name: api-v1
-          port: 8080
+        - name: app-service
+          port: 80
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: admin-app
+  namespace: default
+  annotations:
+    cfgate.io/dns-sync: enabled
+    cfgate.io/access-policy: cfgate-system/internal-apps
+    cfgate.io/origin-protocol: https
+    cfgate.io/origin-ssl-verify: "true"
+spec:
+  parentRefs:
+    - name: cloudflare-tunnel
+      namespace: cfgate-system
+  hostnames:
+    - admin.example.com
+  rules:
+    - backendRefs:
+        - name: admin-service
+          port: 443

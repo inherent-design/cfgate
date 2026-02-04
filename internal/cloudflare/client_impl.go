@@ -5,9 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	cf "github.com/cloudflare/cloudflare-go/v6"
+	"github.com/cloudflare/cloudflare-go/v6/accounts"
 	"github.com/cloudflare/cloudflare-go/v6/dns"
 	"github.com/cloudflare/cloudflare-go/v6/option"
 	"github.com/cloudflare/cloudflare-go/v6/zero_trust"
@@ -15,7 +17,20 @@ import (
 )
 
 // ClientOption is a functional option for configuring the client.
-type ClientOption func(*clientImpl)
+type ClientOption func(*clientOptions)
+
+// clientOptions holds configuration for creating a client.
+type clientOptions struct {
+	httpClient *http.Client
+}
+
+// WithHTTPClient sets a custom HTTP client for the Cloudflare API.
+// Useful for testing or custom transport configuration.
+func WithHTTPClient(httpClient *http.Client) ClientOption {
+	return func(opts *clientOptions) {
+		opts.httpClient = httpClient
+	}
+}
 
 // clientImpl implements the Client interface using cloudflare-go v6 SDK.
 type clientImpl struct {
@@ -28,16 +43,24 @@ func NewClient(apiToken string, opts ...ClientOption) (Client, error) {
 		return nil, errors.New("API token is required")
 	}
 
-	api := cf.NewClient(
+	// Apply functional options
+	clientOpts := &clientOptions{}
+	for _, opt := range opts {
+		opt(clientOpts)
+	}
+
+	// Build cloudflare-go options
+	cfOpts := []option.RequestOption{
 		option.WithAPIToken(apiToken),
-	)
+	}
+	if clientOpts.httpClient != nil {
+		cfOpts = append(cfOpts, option.WithHTTPClient(clientOpts.httpClient))
+	}
+
+	api := cf.NewClient(cfOpts...)
 
 	c := &clientImpl{
 		api: api,
-	}
-
-	for _, opt := range opts {
-		opt(c)
 	}
 
 	return c, nil
@@ -431,6 +454,46 @@ func (c *clientImpl) ValidateToken(ctx context.Context, accountID string) error 
 	return nil
 }
 
+// ListAccounts lists all accounts accessible with the current credentials.
+// Uses direct List() instead of ListAutoPaging() to avoid SDK pagination bug
+// (cloudflare-python#2584) where has_next_page() incorrectly returns true
+// with account-scoped tokens, causing infinite loops.
+func (c *clientImpl) ListAccounts(ctx context.Context) ([]Account, error) {
+	resp, err := c.api.Accounts.List(ctx, accounts.AccountListParams{
+		PerPage: cf.F(float64(50)), // Most users have < 50 accounts
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list accounts: %w", err)
+	}
+
+	var result []Account
+	for _, acc := range resp.Result {
+		result = append(result, Account{
+			ID:   acc.ID,
+			Name: acc.Name,
+		})
+	}
+
+	return result, nil
+}
+
+// GetAccountByName retrieves an account by name.
+// Returns nil if the account does not exist.
+func (c *clientImpl) GetAccountByName(ctx context.Context, name string) (*Account, error) {
+	accounts, err := c.ListAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, acc := range accounts {
+		if acc.Name == name {
+			return &acc, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // tunnelFromAPI converts a Cloudflare API tunnel to our Tunnel type.
 func tunnelFromAPI(t *zero_trust.CloudflareTunnel) *Tunnel {
 	if t == nil {
@@ -522,4 +585,1112 @@ func generateTunnelSecret() string {
 	// Generate 32 random bytes and base64 encode them
 	// Using a simple deterministic approach for now (the API generates the actual secret)
 	return "Y2ZnYXRlLWdlbmVyYXRlZC1zZWNyZXQtdG9rZW4="
+}
+
+// =============================================================================
+// Access Application operations
+// =============================================================================
+
+// CreateAccessApplication creates a new Access application.
+func (c *clientImpl) CreateAccessApplication(ctx context.Context, accountID string, params CreateApplicationParams) (*AccessApplication, error) {
+	appType := zero_trust.ApplicationType(params.Type)
+	if params.Type == "" {
+		appType = zero_trust.ApplicationTypeSelfHosted
+	}
+
+	sessionDuration := params.SessionDuration
+	if sessionDuration == "" {
+		sessionDuration = "24h"
+	}
+
+	httpOnly := true
+	if params.HttpOnlyCookieAttribute != nil {
+		httpOnly = *params.HttpOnlyCookieAttribute
+	}
+
+	sameSite := params.SameSiteCookieAttribute
+	if sameSite == "" {
+		sameSite = "lax"
+	}
+
+	result, err := c.api.ZeroTrust.Access.Applications.New(ctx, zero_trust.AccessApplicationNewParams{
+		AccountID: cf.F(accountID),
+		Body: zero_trust.AccessApplicationNewParamsBodySelfHostedApplication{
+			Domain:                  cf.F(params.Domain),
+			Type:                    cf.F(appType),
+			Name:                    cf.F(params.Name),
+			SessionDuration:         cf.F(sessionDuration),
+			AllowedIdPs:             cf.F(params.AllowedIdps),
+			AutoRedirectToIdentity:  cf.F(params.AutoRedirectToIdentity),
+			EnableBindingCookie:     cf.F(params.EnableBindingCookie),
+			HTTPOnlyCookieAttribute: cf.F(httpOnly),
+			SameSiteCookieAttribute: cf.F(sameSite),
+			SkipInterstitial:        cf.F(params.SkipInterstitial),
+			LogoURL:                 cf.F(params.LogoURL),
+			AppLauncherVisible:      cf.F(params.AppLauncherVisible),
+			CustomDenyMessage:       cf.F(params.CustomDenyMessage),
+			CustomDenyURL:           cf.F(params.CustomDenyURL),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access application: %w", err)
+	}
+
+	return applicationFromNewResponse(result), nil
+}
+
+// GetAccessApplication retrieves an Access application by ID.
+func (c *clientImpl) GetAccessApplication(ctx context.Context, accountID, appID string) (*AccessApplication, error) {
+	result, err := c.api.ZeroTrust.Access.Applications.Get(ctx, appID, zero_trust.AccessApplicationGetParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get access application: %w", err)
+	}
+
+	return applicationFromGetResponse(result), nil
+}
+
+// UpdateAccessApplication updates an existing Access application.
+func (c *clientImpl) UpdateAccessApplication(ctx context.Context, accountID, appID string, params UpdateApplicationParams) (*AccessApplication, error) {
+	httpOnly := true
+	if params.HttpOnlyCookieAttribute != nil {
+		httpOnly = *params.HttpOnlyCookieAttribute
+	}
+
+	sameSite := params.SameSiteCookieAttribute
+	if sameSite == "" {
+		sameSite = "lax"
+	}
+
+	result, err := c.api.ZeroTrust.Access.Applications.Update(ctx, appID, zero_trust.AccessApplicationUpdateParams{
+		AccountID: cf.F(accountID),
+		Body: zero_trust.AccessApplicationUpdateParamsBodySelfHostedApplication{
+			Domain:                  cf.F(params.Domain),
+			Type:                    cf.F(zero_trust.ApplicationTypeSelfHosted),
+			Name:                    cf.F(params.Name),
+			SessionDuration:         cf.F(params.SessionDuration),
+			AllowedIdPs:             cf.F(params.AllowedIdps),
+			AutoRedirectToIdentity:  cf.F(params.AutoRedirectToIdentity),
+			EnableBindingCookie:     cf.F(params.EnableBindingCookie),
+			HTTPOnlyCookieAttribute: cf.F(httpOnly),
+			SameSiteCookieAttribute: cf.F(sameSite),
+			SkipInterstitial:        cf.F(params.SkipInterstitial),
+			LogoURL:                 cf.F(params.LogoURL),
+			AppLauncherVisible:      cf.F(params.AppLauncherVisible),
+			CustomDenyMessage:       cf.F(params.CustomDenyMessage),
+			CustomDenyURL:           cf.F(params.CustomDenyURL),
+		},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update access application: %w", err)
+	}
+
+	return applicationFromUpdateResponse(result), nil
+}
+
+// DeleteAccessApplication deletes an Access application.
+func (c *clientImpl) DeleteAccessApplication(ctx context.Context, accountID, appID string) error {
+	_, err := c.api.ZeroTrust.Access.Applications.Delete(ctx, appID, zero_trust.AccessApplicationDeleteParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete access application: %w", err)
+	}
+
+	return nil
+}
+
+// ListAccessApplications lists all Access applications.
+func (c *clientImpl) ListAccessApplications(ctx context.Context, accountID string) ([]AccessApplication, error) {
+	var apps []AccessApplication
+
+	page := c.api.ZeroTrust.Access.Applications.ListAutoPaging(ctx, zero_trust.AccessApplicationListParams{
+		AccountID: cf.F(accountID),
+	})
+
+	for page.Next() {
+		app := page.Current()
+		apps = append(apps, *applicationFromListResponse(&app))
+	}
+
+	if err := page.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list access applications: %w", err)
+	}
+
+	return apps, nil
+}
+
+// GetAccessApplicationByName retrieves an Access application by name.
+// Returns nil if the application does not exist.
+func (c *clientImpl) GetAccessApplicationByName(ctx context.Context, accountID, name string) (*AccessApplication, error) {
+	apps, err := c.ListAccessApplications(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, app := range apps {
+		if app.Name == name {
+			appCopy := app
+			return &appCopy, nil
+		}
+	}
+
+	return nil, nil // Not found
+}
+
+// =============================================================================
+// Access Policy operations (application-scoped)
+// =============================================================================
+
+// CreateAccessPolicy creates a new Access policy for an application.
+func (c *clientImpl) CreateAccessPolicy(ctx context.Context, accountID, appID string, params CreatePolicyParams) (*AccessPolicy, error) {
+	// Build request options with fields missing from SDK's NewParams struct.
+	// cloudflare-go v6.6.0 doesn't include name, decision, include, exclude, require in NewParams.
+	opts := []option.RequestOption{
+		option.WithJSONSet("name", params.Name),
+		option.WithJSONSet("decision", params.Decision),
+	}
+	if len(params.Include) > 0 {
+		opts = append(opts, option.WithJSONSet("include", accessRulesToAPI(params.Include)))
+	}
+	if len(params.Exclude) > 0 {
+		opts = append(opts, option.WithJSONSet("exclude", accessRulesToAPI(params.Exclude)))
+	}
+	if len(params.Require) > 0 {
+		opts = append(opts, option.WithJSONSet("require", accessRulesToAPI(params.Require)))
+	}
+
+	result, err := c.api.ZeroTrust.Access.Applications.Policies.New(ctx, appID, zero_trust.AccessApplicationPolicyNewParams{
+		AccountID:                    cf.F(accountID),
+		Precedence:                   cf.F(int64(params.Precedence)),
+		SessionDuration:              cf.F(params.SessionDuration),
+		PurposeJustificationRequired: cf.F(params.PurposeJustificationRequired),
+		PurposeJustificationPrompt:   cf.F(params.PurposeJustificationPrompt),
+		ApprovalRequired:             cf.F(params.ApprovalRequired),
+	}, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access policy: %w", err)
+	}
+
+	return policyFromNewResponse(result, params.Name, params.Decision), nil
+}
+
+// GetAccessPolicy retrieves an Access policy by ID.
+func (c *clientImpl) GetAccessPolicy(ctx context.Context, accountID, appID, policyID string) (*AccessPolicy, error) {
+	result, err := c.api.ZeroTrust.Access.Applications.Policies.Get(ctx, appID, policyID, zero_trust.AccessApplicationPolicyGetParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get access policy: %w", err)
+	}
+
+	return policyFromGetResponse(result), nil
+}
+
+// UpdateAccessPolicy updates an existing Access policy.
+func (c *clientImpl) UpdateAccessPolicy(ctx context.Context, accountID, appID, policyID string, params UpdatePolicyParams) (*AccessPolicy, error) {
+	// Build request options with fields missing from SDK's UpdateParams struct.
+	opts := []option.RequestOption{
+		option.WithJSONSet("name", params.Name),
+		option.WithJSONSet("decision", params.Decision),
+	}
+	if len(params.Include) > 0 {
+		opts = append(opts, option.WithJSONSet("include", accessRulesToAPI(params.Include)))
+	}
+	if len(params.Exclude) > 0 {
+		opts = append(opts, option.WithJSONSet("exclude", accessRulesToAPI(params.Exclude)))
+	}
+	if len(params.Require) > 0 {
+		opts = append(opts, option.WithJSONSet("require", accessRulesToAPI(params.Require)))
+	}
+
+	result, err := c.api.ZeroTrust.Access.Applications.Policies.Update(ctx, appID, policyID, zero_trust.AccessApplicationPolicyUpdateParams{
+		AccountID:                    cf.F(accountID),
+		Precedence:                   cf.F(int64(params.Precedence)),
+		SessionDuration:              cf.F(params.SessionDuration),
+		PurposeJustificationRequired: cf.F(params.PurposeJustificationRequired),
+		PurposeJustificationPrompt:   cf.F(params.PurposeJustificationPrompt),
+		ApprovalRequired:             cf.F(params.ApprovalRequired),
+	}, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update access policy: %w", err)
+	}
+
+	return policyFromUpdateResponse(result, params.Name, params.Decision), nil
+}
+
+// DeleteAccessPolicy deletes an Access policy.
+func (c *clientImpl) DeleteAccessPolicy(ctx context.Context, accountID, appID, policyID string) error {
+	_, err := c.api.ZeroTrust.Access.Applications.Policies.Delete(ctx, appID, policyID, zero_trust.AccessApplicationPolicyDeleteParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete access policy: %w", err)
+	}
+
+	return nil
+}
+
+// ListAccessPolicies lists all Access policies for an application.
+func (c *clientImpl) ListAccessPolicies(ctx context.Context, accountID, appID string) ([]AccessPolicy, error) {
+	var policies []AccessPolicy
+
+	page := c.api.ZeroTrust.Access.Applications.Policies.ListAutoPaging(ctx, appID, zero_trust.AccessApplicationPolicyListParams{
+		AccountID: cf.F(accountID),
+	})
+
+	for page.Next() {
+		policy := page.Current()
+		policies = append(policies, *policyFromListResponse(&policy))
+	}
+
+	if err := page.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list access policies: %w", err)
+	}
+
+	return policies, nil
+}
+
+// =============================================================================
+// Access Group operations
+// =============================================================================
+
+// CreateAccessGroup creates a new Access group.
+func (c *clientImpl) CreateAccessGroup(ctx context.Context, accountID string, params CreateGroupParams) (*AccessGroup, error) {
+	result, err := c.api.ZeroTrust.Access.Groups.New(ctx, zero_trust.AccessGroupNewParams{
+		AccountID: cf.F(accountID),
+		Name:      cf.F(params.Name),
+		Include:   cf.F(accessRulesToAPI(params.Include)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create access group: %w", err)
+	}
+
+	return groupFromNewResponse(result), nil
+}
+
+// GetAccessGroup retrieves an Access group by ID.
+func (c *clientImpl) GetAccessGroup(ctx context.Context, accountID, groupID string) (*AccessGroup, error) {
+	result, err := c.api.ZeroTrust.Access.Groups.Get(ctx, groupID, zero_trust.AccessGroupGetParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get access group: %w", err)
+	}
+
+	return groupFromGetResponse(result), nil
+}
+
+// UpdateAccessGroup updates an existing Access group.
+func (c *clientImpl) UpdateAccessGroup(ctx context.Context, accountID, groupID string, params UpdateGroupParams) (*AccessGroup, error) {
+	result, err := c.api.ZeroTrust.Access.Groups.Update(ctx, groupID, zero_trust.AccessGroupUpdateParams{
+		AccountID: cf.F(accountID),
+		Name:      cf.F(params.Name),
+		Include:   cf.F(accessRulesToAPI(params.Include)),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update access group: %w", err)
+	}
+
+	return groupFromUpdateResponse(result), nil
+}
+
+// DeleteAccessGroup deletes an Access group.
+func (c *clientImpl) DeleteAccessGroup(ctx context.Context, accountID, groupID string) error {
+	_, err := c.api.ZeroTrust.Access.Groups.Delete(ctx, groupID, zero_trust.AccessGroupDeleteParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete access group: %w", err)
+	}
+
+	return nil
+}
+
+// ListAccessGroups lists all Access groups.
+func (c *clientImpl) ListAccessGroups(ctx context.Context, accountID string) ([]AccessGroup, error) {
+	var groups []AccessGroup
+
+	page := c.api.ZeroTrust.Access.Groups.ListAutoPaging(ctx, zero_trust.AccessGroupListParams{
+		AccountID: cf.F(accountID),
+	})
+
+	for page.Next() {
+		group := page.Current()
+		groups = append(groups, *groupFromListResponse(&group))
+	}
+
+	if err := page.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list access groups: %w", err)
+	}
+
+	return groups, nil
+}
+
+// GetAccessGroupByName retrieves an Access group by name.
+// Returns nil if the group does not exist.
+func (c *clientImpl) GetAccessGroupByName(ctx context.Context, accountID, name string) (*AccessGroup, error) {
+	groups, err := c.ListAccessGroups(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, group := range groups {
+		if group.Name == name {
+			groupCopy := group
+			return &groupCopy, nil
+		}
+	}
+
+	return nil, nil // Not found
+}
+
+// =============================================================================
+// Service Token operations
+// =============================================================================
+
+// CreateServiceToken creates a new service token.
+func (c *clientImpl) CreateServiceToken(ctx context.Context, accountID string, params CreateServiceTokenParams) (*ServiceTokenWithSecret, error) {
+	result, err := c.api.ZeroTrust.Access.ServiceTokens.New(ctx, zero_trust.AccessServiceTokenNewParams{
+		AccountID: cf.F(accountID),
+		Name:      cf.F(params.Name),
+		Duration:  cf.F(params.Duration),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create service token: %w", err)
+	}
+
+	return &ServiceTokenWithSecret{
+		ServiceToken: ServiceToken{
+			ID:       result.ID,
+			Name:     result.Name,
+			ClientID: result.ClientID,
+			Duration: result.Duration,
+			// ExpiresAt not in create response
+		},
+		ClientSecret: result.ClientSecret,
+	}, nil
+}
+
+// GetServiceToken retrieves a service token by ID.
+func (c *clientImpl) GetServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceToken, error) {
+	// The SDK doesn't have a direct Get method, so we list and filter
+	tokens, err := c.ListServiceTokens(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, token := range tokens {
+		if token.ID == tokenID {
+			tokenCopy := token
+			return &tokenCopy, nil
+		}
+	}
+
+	return nil, nil // Not found
+}
+
+// UpdateServiceToken updates an existing service token.
+func (c *clientImpl) UpdateServiceToken(ctx context.Context, accountID, tokenID string, params UpdateServiceTokenParams) (*ServiceToken, error) {
+	result, err := c.api.ZeroTrust.Access.ServiceTokens.Update(ctx, tokenID, zero_trust.AccessServiceTokenUpdateParams{
+		AccountID: cf.F(accountID),
+		Name:      cf.F(params.Name),
+		Duration:  cf.F(params.Duration),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update service token: %w", err)
+	}
+
+	return &ServiceToken{
+		ID:       result.ID,
+		Name:     result.Name,
+		ClientID: result.ClientID,
+		Duration: result.Duration,
+		// ExpiresAt not in update response
+	}, nil
+}
+
+// DeleteServiceToken deletes a service token.
+func (c *clientImpl) DeleteServiceToken(ctx context.Context, accountID, tokenID string) error {
+	_, err := c.api.ZeroTrust.Access.ServiceTokens.Delete(ctx, tokenID, zero_trust.AccessServiceTokenDeleteParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete service token: %w", err)
+	}
+
+	return nil
+}
+
+// ListServiceTokens lists all service tokens.
+func (c *clientImpl) ListServiceTokens(ctx context.Context, accountID string) ([]ServiceToken, error) {
+	var tokens []ServiceToken
+
+	page := c.api.ZeroTrust.Access.ServiceTokens.ListAutoPaging(ctx, zero_trust.AccessServiceTokenListParams{
+		AccountID: cf.F(accountID),
+	})
+
+	for page.Next() {
+		token := page.Current()
+		tokens = append(tokens, ServiceToken{
+			ID:        token.ID,
+			Name:      token.Name,
+			ClientID:  token.ClientID,
+			Duration:  token.Duration,
+			ExpiresAt: token.ExpiresAt,
+		})
+	}
+
+	if err := page.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list service tokens: %w", err)
+	}
+
+	return tokens, nil
+}
+
+// RotateServiceToken rotates a service token.
+func (c *clientImpl) RotateServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceTokenWithSecret, error) {
+	result, err := c.api.ZeroTrust.Access.ServiceTokens.Rotate(ctx, tokenID, zero_trust.AccessServiceTokenRotateParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to rotate service token: %w", err)
+	}
+
+	return &ServiceTokenWithSecret{
+		ServiceToken: ServiceToken{
+			ID:       result.ID,
+			Name:     result.Name,
+			ClientID: result.ClientID,
+			Duration: result.Duration,
+			// ExpiresAt not in rotate response
+		},
+		ClientSecret: result.ClientSecret,
+	}, nil
+}
+
+// RefreshServiceToken refreshes a service token's expiration.
+func (c *clientImpl) RefreshServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceToken, error) {
+	result, err := c.api.ZeroTrust.Access.ServiceTokens.Refresh(ctx, tokenID, zero_trust.AccessServiceTokenRefreshParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to refresh service token: %w", err)
+	}
+
+	return &ServiceToken{
+		ID:        result.ID,
+		Name:      result.Name,
+		ClientID:  result.ClientID,
+		Duration:  result.Duration,
+		ExpiresAt: result.ExpiresAt,
+	}, nil
+}
+
+// =============================================================================
+// mTLS Certificate operations
+// =============================================================================
+
+// CreateMTLSCertificate creates a new mTLS certificate.
+func (c *clientImpl) CreateMTLSCertificate(ctx context.Context, accountID string, params CreateCertificateParams) (*MTLSCertificate, error) {
+	result, err := c.api.ZeroTrust.Access.Certificates.New(ctx, zero_trust.AccessCertificateNewParams{
+		AccountID:           cf.F(accountID),
+		Name:                cf.F(params.Name),
+		Certificate:         cf.F(params.Certificate),
+		AssociatedHostnames: cf.F(params.AssociatedHostnames),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create mTLS certificate: %w", err)
+	}
+
+	return &MTLSCertificate{
+		ID:                  result.ID,
+		Name:                result.Name,
+		Fingerprint:         result.Fingerprint,
+		AssociatedHostnames: result.AssociatedHostnames,
+		ExpiresOn:           result.ExpiresOn,
+	}, nil
+}
+
+// GetMTLSCertificate retrieves an mTLS certificate by ID.
+func (c *clientImpl) GetMTLSCertificate(ctx context.Context, accountID, certID string) (*MTLSCertificate, error) {
+	result, err := c.api.ZeroTrust.Access.Certificates.Get(ctx, certID, zero_trust.AccessCertificateGetParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get mTLS certificate: %w", err)
+	}
+
+	return &MTLSCertificate{
+		ID:                  result.ID,
+		Name:                result.Name,
+		Fingerprint:         result.Fingerprint,
+		AssociatedHostnames: result.AssociatedHostnames,
+		ExpiresOn:           result.ExpiresOn,
+	}, nil
+}
+
+// UpdateMTLSCertificate updates an existing mTLS certificate.
+func (c *clientImpl) UpdateMTLSCertificate(ctx context.Context, accountID, certID string, params UpdateCertificateParams) (*MTLSCertificate, error) {
+	result, err := c.api.ZeroTrust.Access.Certificates.Update(ctx, certID, zero_trust.AccessCertificateUpdateParams{
+		AccountID:           cf.F(accountID),
+		Name:                cf.F(params.Name),
+		AssociatedHostnames: cf.F(params.AssociatedHostnames),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update mTLS certificate: %w", err)
+	}
+
+	return &MTLSCertificate{
+		ID:                  result.ID,
+		Name:                result.Name,
+		Fingerprint:         result.Fingerprint,
+		AssociatedHostnames: result.AssociatedHostnames,
+		ExpiresOn:           result.ExpiresOn,
+	}, nil
+}
+
+// DeleteMTLSCertificate deletes an mTLS certificate.
+func (c *clientImpl) DeleteMTLSCertificate(ctx context.Context, accountID, certID string) error {
+	_, err := c.api.ZeroTrust.Access.Certificates.Delete(ctx, certID, zero_trust.AccessCertificateDeleteParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			return nil // Already deleted
+		}
+		return fmt.Errorf("failed to delete mTLS certificate: %w", err)
+	}
+
+	return nil
+}
+
+// ListMTLSCertificates lists all mTLS certificates.
+func (c *clientImpl) ListMTLSCertificates(ctx context.Context, accountID string) ([]MTLSCertificate, error) {
+	var certs []MTLSCertificate
+
+	page := c.api.ZeroTrust.Access.Certificates.ListAutoPaging(ctx, zero_trust.AccessCertificateListParams{
+		AccountID: cf.F(accountID),
+	})
+
+	for page.Next() {
+		cert := page.Current()
+		certs = append(certs, MTLSCertificate{
+			ID:                  cert.ID,
+			Name:                cert.Name,
+			Fingerprint:         cert.Fingerprint,
+			AssociatedHostnames: cert.AssociatedHostnames,
+			ExpiresOn:           cert.ExpiresOn,
+		})
+	}
+
+	if err := page.Err(); err != nil {
+		return nil, fmt.Errorf("failed to list mTLS certificates: %w", err)
+	}
+
+	return certs, nil
+}
+
+// =============================================================================
+// mTLS Certificate Settings
+// =============================================================================
+
+// GetMTLSCertificateSettings retrieves mTLS certificate settings.
+func (c *clientImpl) GetMTLSCertificateSettings(ctx context.Context, accountID string) ([]CertificateSettings, error) {
+	result, err := c.api.ZeroTrust.Access.Certificates.Settings.Get(ctx, zero_trust.AccessCertificateSettingGetParams{
+		AccountID: cf.F(accountID),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get mTLS certificate settings: %w", err)
+	}
+
+	settings := make([]CertificateSettings, len(result.Result))
+	for i, s := range result.Result {
+		settings[i] = CertificateSettings{
+			Hostname:                    s.Hostname,
+			ChinaNetwork:                s.ChinaNetwork,
+			ClientCertificateForwarding: s.ClientCertificateForwarding,
+		}
+	}
+
+	return settings, nil
+}
+
+// UpdateMTLSCertificateSettings updates mTLS certificate settings.
+func (c *clientImpl) UpdateMTLSCertificateSettings(ctx context.Context, accountID string, settings []CertificateSettingsParam) ([]CertificateSettings, error) {
+	apiSettings := make([]zero_trust.CertificateSettingsParam, len(settings))
+	for i, s := range settings {
+		apiSettings[i] = zero_trust.CertificateSettingsParam{
+			Hostname:                    cf.F(s.Hostname),
+			ChinaNetwork:                cf.F(s.ChinaNetwork),
+			ClientCertificateForwarding: cf.F(s.ClientCertificateForwarding),
+		}
+	}
+
+	result, err := c.api.ZeroTrust.Access.Certificates.Settings.Update(ctx, zero_trust.AccessCertificateSettingUpdateParams{
+		AccountID: cf.F(accountID),
+		Settings:  cf.F(apiSettings),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to update mTLS certificate settings: %w", err)
+	}
+
+	resultSettings := make([]CertificateSettings, len(result.Result))
+	for i, s := range result.Result {
+		resultSettings[i] = CertificateSettings{
+			Hostname:                    s.Hostname,
+			ChinaNetwork:                s.ChinaNetwork,
+			ClientCertificateForwarding: s.ClientCertificateForwarding,
+		}
+	}
+
+	return resultSettings, nil
+}
+
+// =============================================================================
+// Conversion helpers
+// =============================================================================
+
+// applicationFromNewResponse converts an API response to our AccessApplication type.
+func applicationFromNewResponse(resp *zero_trust.AccessApplicationNewResponse) *AccessApplication {
+	if resp == nil {
+		return nil
+	}
+
+	// Use flat fields directly from response - no union extraction needed for common fields
+	app := &AccessApplication{
+		ID:                      resp.ID,
+		AUD:                     resp.AUD,
+		Name:                    resp.Name,
+		Domain:                  resp.Domain,
+		Type:                    string(resp.Type),
+		SessionDuration:         resp.SessionDuration,
+		AutoRedirectToIdentity:  resp.AutoRedirectToIdentity,
+		EnableBindingCookie:     resp.EnableBindingCookie,
+		HttpOnlyCookieAttribute: resp.HTTPOnlyCookieAttribute,
+		SameSiteCookieAttribute: resp.SameSiteCookieAttribute,
+		SkipInterstitial:        resp.SkipInterstitial,
+		LogoURL:                 resp.LogoURL,
+		AppLauncherVisible:      resp.AppLauncherVisible,
+		CustomDenyMessage:       resp.CustomDenyMessage,
+		CustomDenyURL:           resp.CustomDenyURL,
+		// CreatedAt and UpdatedAt not available in application responses
+	}
+
+	// Handle AllowedIdPs which is an interface{} in the response
+	if allowedIdPs, ok := resp.AllowedIdPs.([]interface{}); ok {
+		for _, idp := range allowedIdPs {
+			if s, ok := idp.(string); ok {
+				app.AllowedIdps = append(app.AllowedIdps, s)
+			}
+		}
+	}
+
+	return app
+}
+
+// applicationFromGetResponse converts a Get response to our AccessApplication type.
+func applicationFromGetResponse(resp *zero_trust.AccessApplicationGetResponse) *AccessApplication {
+	if resp == nil {
+		return nil
+	}
+
+	app := &AccessApplication{
+		ID:                      resp.ID,
+		AUD:                     resp.AUD,
+		Name:                    resp.Name,
+		Domain:                  resp.Domain,
+		Type:                    string(resp.Type),
+		SessionDuration:         resp.SessionDuration,
+		AutoRedirectToIdentity:  resp.AutoRedirectToIdentity,
+		EnableBindingCookie:     resp.EnableBindingCookie,
+		HttpOnlyCookieAttribute: resp.HTTPOnlyCookieAttribute,
+		SameSiteCookieAttribute: resp.SameSiteCookieAttribute,
+		SkipInterstitial:        resp.SkipInterstitial,
+		LogoURL:                 resp.LogoURL,
+		AppLauncherVisible:      resp.AppLauncherVisible,
+		CustomDenyMessage:       resp.CustomDenyMessage,
+		CustomDenyURL:           resp.CustomDenyURL,
+	}
+
+	// Handle AllowedIdPs which is an interface{} in the response
+	if allowedIdPs, ok := resp.AllowedIdPs.([]interface{}); ok {
+		for _, idp := range allowedIdPs {
+			if s, ok := idp.(string); ok {
+				app.AllowedIdps = append(app.AllowedIdps, s)
+			}
+		}
+	}
+
+	return app
+}
+
+// applicationFromUpdateResponse converts an Update response to our AccessApplication type.
+func applicationFromUpdateResponse(resp *zero_trust.AccessApplicationUpdateResponse) *AccessApplication {
+	if resp == nil {
+		return nil
+	}
+
+	app := &AccessApplication{
+		ID:                      resp.ID,
+		AUD:                     resp.AUD,
+		Name:                    resp.Name,
+		Domain:                  resp.Domain,
+		Type:                    string(resp.Type),
+		SessionDuration:         resp.SessionDuration,
+		AutoRedirectToIdentity:  resp.AutoRedirectToIdentity,
+		EnableBindingCookie:     resp.EnableBindingCookie,
+		HttpOnlyCookieAttribute: resp.HTTPOnlyCookieAttribute,
+		SameSiteCookieAttribute: resp.SameSiteCookieAttribute,
+		SkipInterstitial:        resp.SkipInterstitial,
+		LogoURL:                 resp.LogoURL,
+		AppLauncherVisible:      resp.AppLauncherVisible,
+		CustomDenyMessage:       resp.CustomDenyMessage,
+		CustomDenyURL:           resp.CustomDenyURL,
+	}
+
+	// Handle AllowedIdPs which is an interface{} in the response
+	if allowedIdPs, ok := resp.AllowedIdPs.([]interface{}); ok {
+		for _, idp := range allowedIdPs {
+			if s, ok := idp.(string); ok {
+				app.AllowedIdps = append(app.AllowedIdps, s)
+			}
+		}
+	}
+
+	return app
+}
+
+// applicationFromListResponse converts a list response item to our AccessApplication type.
+func applicationFromListResponse(resp *zero_trust.AccessApplicationListResponse) *AccessApplication {
+	if resp == nil {
+		return nil
+	}
+
+	app := &AccessApplication{
+		ID:                      resp.ID,
+		AUD:                     resp.AUD,
+		Name:                    resp.Name,
+		Domain:                  resp.Domain,
+		Type:                    string(resp.Type),
+		SessionDuration:         resp.SessionDuration,
+		AutoRedirectToIdentity:  resp.AutoRedirectToIdentity,
+		EnableBindingCookie:     resp.EnableBindingCookie,
+		HttpOnlyCookieAttribute: resp.HTTPOnlyCookieAttribute,
+		SameSiteCookieAttribute: resp.SameSiteCookieAttribute,
+		SkipInterstitial:        resp.SkipInterstitial,
+		LogoURL:                 resp.LogoURL,
+		AppLauncherVisible:      resp.AppLauncherVisible,
+		CustomDenyMessage:       resp.CustomDenyMessage,
+		CustomDenyURL:           resp.CustomDenyURL,
+	}
+
+	// Handle AllowedIdPs which is an interface{} in the response
+	if allowedIdPs, ok := resp.AllowedIdPs.([]interface{}); ok {
+		for _, idp := range allowedIdPs {
+			if s, ok := idp.(string); ok {
+				app.AllowedIdps = append(app.AllowedIdps, s)
+			}
+		}
+	}
+
+	return app
+}
+
+// policyFromNewResponse converts a policy API response to our AccessPolicy type.
+func policyFromNewResponse(resp *zero_trust.AccessApplicationPolicyNewResponse, name, decision string) *AccessPolicy {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessPolicy{
+		ID:                           resp.ID,
+		Name:                         name,
+		Decision:                     decision,
+		Precedence:                   int(resp.Precedence),
+		SessionDuration:              resp.SessionDuration,
+		PurposeJustificationRequired: resp.PurposeJustificationRequired,
+		PurposeJustificationPrompt:   resp.PurposeJustificationPrompt,
+		ApprovalRequired:             resp.ApprovalRequired,
+		CreatedAt:                    resp.CreatedAt,
+		UpdatedAt:                    resp.UpdatedAt,
+	}
+}
+
+// policyFromGetResponse converts a Get response to our AccessPolicy type.
+func policyFromGetResponse(resp *zero_trust.AccessApplicationPolicyGetResponse) *AccessPolicy {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessPolicy{
+		ID:                           resp.ID,
+		Name:                         resp.Name,
+		Decision:                     string(resp.Decision),
+		Precedence:                   int(resp.Precedence),
+		SessionDuration:              resp.SessionDuration,
+		PurposeJustificationRequired: resp.PurposeJustificationRequired,
+		PurposeJustificationPrompt:   resp.PurposeJustificationPrompt,
+		ApprovalRequired:             resp.ApprovalRequired,
+		CreatedAt:                    resp.CreatedAt,
+		UpdatedAt:                    resp.UpdatedAt,
+	}
+}
+
+// policyFromUpdateResponse converts an Update response to our AccessPolicy type.
+func policyFromUpdateResponse(resp *zero_trust.AccessApplicationPolicyUpdateResponse, name, decision string) *AccessPolicy {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessPolicy{
+		ID:                           resp.ID,
+		Name:                         name,
+		Decision:                     decision,
+		Precedence:                   int(resp.Precedence),
+		SessionDuration:              resp.SessionDuration,
+		PurposeJustificationRequired: resp.PurposeJustificationRequired,
+		PurposeJustificationPrompt:   resp.PurposeJustificationPrompt,
+		ApprovalRequired:             resp.ApprovalRequired,
+		CreatedAt:                    resp.CreatedAt,
+		UpdatedAt:                    resp.UpdatedAt,
+	}
+}
+
+// policyFromListResponse converts a list response item to our AccessPolicy type.
+func policyFromListResponse(resp *zero_trust.AccessApplicationPolicyListResponse) *AccessPolicy {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessPolicy{
+		ID:                           resp.ID,
+		Name:                         resp.Name,
+		Decision:                     string(resp.Decision),
+		Precedence:                   int(resp.Precedence),
+		SessionDuration:              resp.SessionDuration,
+		PurposeJustificationRequired: resp.PurposeJustificationRequired,
+		PurposeJustificationPrompt:   resp.PurposeJustificationPrompt,
+		ApprovalRequired:             resp.ApprovalRequired,
+		CreatedAt:                    resp.CreatedAt,
+		UpdatedAt:                    resp.UpdatedAt,
+	}
+}
+
+// groupFromNewResponse converts a group API response to our AccessGroup type.
+func groupFromNewResponse(resp *zero_trust.AccessGroupNewResponse) *AccessGroup {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessGroup{
+		ID:   resp.ID,
+		Name: resp.Name,
+		// CreatedAt and UpdatedAt not available in group responses
+	}
+}
+
+// groupFromGetResponse converts a Get response to our AccessGroup type.
+func groupFromGetResponse(resp *zero_trust.AccessGroupGetResponse) *AccessGroup {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessGroup{
+		ID:   resp.ID,
+		Name: resp.Name,
+	}
+}
+
+// groupFromUpdateResponse converts an Update response to our AccessGroup type.
+func groupFromUpdateResponse(resp *zero_trust.AccessGroupUpdateResponse) *AccessGroup {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessGroup{
+		ID:   resp.ID,
+		Name: resp.Name,
+	}
+}
+
+// groupFromListResponse converts a list response item to our AccessGroup type.
+func groupFromListResponse(resp *zero_trust.AccessGroupListResponse) *AccessGroup {
+	if resp == nil {
+		return nil
+	}
+
+	return &AccessGroup{
+		ID:   resp.ID,
+		Name: resp.Name,
+	}
+}
+
+// accessRulesToAPI converts our AccessRuleParam slice to API format.
+func accessRulesToAPI(rules []AccessRuleParam) []zero_trust.AccessRuleUnionParam {
+	if len(rules) == 0 {
+		return nil
+	}
+
+	result := make([]zero_trust.AccessRuleUnionParam, 0, len(rules))
+	for _, rule := range rules {
+		if apiRule := accessRuleToAPI(&rule); apiRule != nil {
+			result = append(result, apiRule)
+		}
+	}
+
+	return result
+}
+
+// accessRuleToAPI converts a single AccessRuleParam to API format.
+func accessRuleToAPI(rule *AccessRuleParam) zero_trust.AccessRuleUnionParam {
+	if rule == nil {
+		return nil
+	}
+
+	// ============================================================
+	// P0: No IdP required
+	// ============================================================
+
+	// IPRange -> zero_trust.IPRuleParam
+	if rule.IPRange != nil {
+		return zero_trust.IPRuleParam{
+			IP: cf.F(zero_trust.IPRuleIPParam{
+				IP: cf.F(*rule.IPRange),
+			}),
+		}
+	}
+
+	// Country -> zero_trust.CountryRuleParam
+	if rule.Country != nil {
+		return zero_trust.CountryRuleParam{
+			Geo: cf.F(zero_trust.CountryRuleGeoParam{
+				CountryCode: cf.F(*rule.Country),
+			}),
+		}
+	}
+
+	// Everyone -> zero_trust.EveryoneRuleParam
+	if rule.Everyone != nil && *rule.Everyone {
+		return zero_trust.EveryoneRuleParam{
+			Everyone: cf.F(zero_trust.EveryoneRuleEveryoneParam{}),
+		}
+	}
+
+	// ServiceTokenID -> zero_trust.ServiceTokenRuleParam
+	if rule.ServiceTokenID != nil {
+		return zero_trust.ServiceTokenRuleParam{
+			ServiceToken: cf.F(zero_trust.ServiceTokenRuleServiceTokenParam{
+				TokenID: cf.F(*rule.ServiceTokenID),
+			}),
+		}
+	}
+
+	// AnyValidServiceToken -> zero_trust.AnyValidServiceTokenRuleParam
+	if rule.AnyValidServiceToken != nil && *rule.AnyValidServiceToken {
+		return zero_trust.AnyValidServiceTokenRuleParam{
+			AnyValidServiceToken: cf.F(zero_trust.AnyValidServiceTokenRuleAnyValidServiceTokenParam{}),
+		}
+	}
+
+	// ============================================================
+	// P1: Basic IdP (Google Workspace)
+	// ============================================================
+
+	// Email -> zero_trust.EmailRuleParam
+	if rule.Email != nil {
+		return zero_trust.EmailRuleParam{
+			Email: cf.F(zero_trust.EmailRuleEmailParam{
+				Email: cf.F(*rule.Email),
+			}),
+		}
+	}
+
+	// EmailDomain -> zero_trust.DomainRuleParam
+	// Note: SDK type is "DomainRule" not "EmailDomainRule"
+	if rule.EmailDomain != nil {
+		return zero_trust.DomainRuleParam{
+			EmailDomain: cf.F(zero_trust.DomainRuleEmailDomainParam{
+				Domain: cf.F(*rule.EmailDomain),
+			}),
+		}
+	}
+
+	// OIDCClaim -> zero_trust.AccessRuleAccessOIDCClaimRuleParam
+	if rule.OIDCClaim != nil {
+		return zero_trust.AccessRuleAccessOIDCClaimRuleParam{
+			OIDC: cf.F(zero_trust.AccessRuleAccessOIDCClaimRuleOIDCParam{
+				IdentityProviderID: cf.F(rule.OIDCClaim.IdentityProviderID),
+				ClaimName:          cf.F(rule.OIDCClaim.ClaimName),
+				ClaimValue:         cf.F(rule.OIDCClaim.ClaimValue),
+			}),
+		}
+	}
+
+	// ============================================================
+	// P2: Google Workspace Groups
+	// ============================================================
+
+	// GSuiteGroup -> zero_trust.GSuiteGroupRuleParam
+	if rule.GSuiteGroup != nil {
+		return zero_trust.GSuiteGroupRuleParam{
+			GSuite: cf.F(zero_trust.GSuiteGroupRuleGSuiteParam{
+				IdentityProviderID: cf.F(rule.GSuiteGroup.IdentityProviderID),
+				Email:              cf.F(rule.GSuiteGroup.Email),
+			}),
+		}
+	}
+
+	// ============================================================
+	// P3: v0.2.0 (kept for backward compatibility)
+	// ============================================================
+
+	if rule.Certificate != nil && *rule.Certificate {
+		return zero_trust.CertificateRuleParam{
+			Certificate: cf.F(zero_trust.CertificateRuleCertificateParam{}),
+		}
+	}
+
+	if rule.GroupID != nil {
+		return zero_trust.GroupRuleParam{
+			Group: cf.F(zero_trust.GroupRuleGroupParam{
+				ID: cf.F(*rule.GroupID),
+			}),
+		}
+	}
+
+	if rule.CommonName != nil {
+		return zero_trust.AccessRuleAccessCommonNameRuleParam{
+			CommonName: cf.F(zero_trust.AccessRuleAccessCommonNameRuleCommonNameParam{
+				CommonName: cf.F(*rule.CommonName),
+			}),
+		}
+	}
+
+	return nil
 }

@@ -8,9 +8,6 @@ _.file = ["secrets.enc.yaml", ".env"]
 IMG = "cfgate:local"
 REGISTRY = "ghcr.io/inherent-design/cfgate"
 
-# Test configuration
-E2E_USE_EXISTING_CLUSTER = "true"
-
 [tools]
 go = "1.25"
 "aqua:kubernetes-sigs/kind" = "0.31.0"
@@ -18,12 +15,13 @@ go = "1.25"
 "aqua:kubernetes-sigs/kustomize" = "5.8.0"
 "aqua:golangci/golangci-lint" = "2.8.0"
 "github:kubernetes-sigs/controller-tools[exe=controller-gen]" = "0.20.0"
+"go:github.com/onsi/ginkgo/v2/ginkgo" = "2.28.1"
 
 #
 # Development
 #
 
-[tasks.generate]
+[tasks.codegen]
 alias = "gen"
 description = "Generate DeepCopy and CRD manifests"
 run = """
@@ -44,13 +42,27 @@ description = "Format and vet code"
 run = "go fmt ./... && go vet ./..."
 
 #
-# Testing
+# E2E Testing (LIVE Cloudflare API only)
 #
 
-[tasks.test]
-alias = ["t", "e2e", "e"]
-description = "Run all tests (requires cluster + Cloudflare creds)"
-run = "go test ./... -v -timeout 30m"
+[tasks.e2e]
+description = "Run E2E tests against live Cloudflare API"
+env = { E2E_USE_EXISTING_CLUSTER = "true" }
+run = """
+echo "Running E2E tests against live Cloudflare API"
+mkdir -p out
+ginkgo -vv -p --keep-going --silence-skips --poll-progress-after=15s \
+  --output-dir out \
+  --json-report=e2e-run.json \
+  --cover --covermode atomic --coverprofile coverage.out \
+  --race \
+  ./test/e2e
+"""
+
+[tasks."e2e:cleanup"]
+alias = ["cleanup"]
+description = "Clean up orphaned E2E test resources from Cloudflare"
+run = "go run ./cmd/cleanup"
 
 #
 # Build
@@ -59,7 +71,7 @@ run = "go test ./... -v -timeout 30m"
 [tasks.build]
 alias = "b"
 description = "Build manager binary"
-depends = ["generate"]
+depends = ["codegen"]
 run = "CGO_ENABLED=0 go build -o bin/manager ./cmd/manager"
 
 [tasks."docker:build"]
@@ -82,6 +94,21 @@ docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -t ${REGISTRY}:latest \
   --push .
+"""
+
+#
+# Release
+#
+
+[tasks."release:manifests"]
+description = "Generate release manifests to dist/"
+depends = ["codegen"]
+run = """
+mkdir -p dist
+cp config/crd/bases/*.yaml dist/
+kustomize build config/default > dist/install.yaml
+echo "Release manifests written to dist/"
+ls -la dist/
 """
 
 #
@@ -110,7 +137,7 @@ run = "kind get clusters | grep cfgate-test && kubectl --context kind-cfgate-tes
 [tasks.install]
 alias = "i"
 description = "Install CRDs into current cluster"
-depends = ["generate"]
+depends = ["codegen"]
 run = "kustomize build config/crd | kubectl apply -f -"
 
 [tasks.uninstall]
@@ -120,7 +147,7 @@ run = "kustomize build config/crd | kubectl delete --ignore-not-found -f -"
 [tasks.deploy]
 alias = "d"
 description = "Deploy controller to current cluster"
-depends = ["generate", "docker:build"]
+depends = ["codegen", "docker:build"]
 run = """
 cd config/manager && kustomize edit set image controller=${IMG}
 kustomize build config/default | kubectl apply -f -
@@ -133,20 +160,5 @@ run = "kustomize build config/default | kubectl delete --ignore-not-found -f -"
 [tasks.run]
 alias = "r"
 description = "Run controller locally (outside cluster)"
-depends = ["generate"]
+depends = ["codegen"]
 run = "go run ./cmd/manager"
-
-#
-# Release
-#
-
-[tasks."release:manifests"]
-description = "Generate release manifests to dist/"
-depends = ["generate"]
-run = """
-mkdir -p dist
-cp config/crd/bases/*.yaml dist/
-kustomize build config/default > dist/install.yaml
-echo "Release manifests written to dist/"
-ls -la dist/
-"""

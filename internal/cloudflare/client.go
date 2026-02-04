@@ -68,6 +68,124 @@ type Client interface {
 	// User API Tokens and Account API Tokens.
 	// Returns an error if the token is invalid or missing permissions.
 	ValidateToken(ctx context.Context, accountID string) error
+
+	// Account operations
+
+	// ListAccounts lists all accounts accessible with the current credentials.
+	ListAccounts(ctx context.Context) ([]Account, error)
+
+	// GetAccountByName retrieves an account by name.
+	// Returns nil if the account does not exist.
+	GetAccountByName(ctx context.Context, name string) (*Account, error)
+
+	// Access Application operations
+
+	// CreateAccessApplication creates a new Access application.
+	CreateAccessApplication(ctx context.Context, accountID string, params CreateApplicationParams) (*AccessApplication, error)
+
+	// GetAccessApplication retrieves an Access application by ID.
+	GetAccessApplication(ctx context.Context, accountID, appID string) (*AccessApplication, error)
+
+	// UpdateAccessApplication updates an existing Access application.
+	UpdateAccessApplication(ctx context.Context, accountID, appID string, params UpdateApplicationParams) (*AccessApplication, error)
+
+	// DeleteAccessApplication deletes an Access application.
+	DeleteAccessApplication(ctx context.Context, accountID, appID string) error
+
+	// ListAccessApplications lists all Access applications.
+	ListAccessApplications(ctx context.Context, accountID string) ([]AccessApplication, error)
+
+	// GetAccessApplicationByName retrieves an Access application by name.
+	// Returns nil if the application does not exist.
+	GetAccessApplicationByName(ctx context.Context, accountID, name string) (*AccessApplication, error)
+
+	// Access Policy operations (application-scoped)
+
+	// CreateAccessPolicy creates a new Access policy for an application.
+	CreateAccessPolicy(ctx context.Context, accountID, appID string, params CreatePolicyParams) (*AccessPolicy, error)
+
+	// GetAccessPolicy retrieves an Access policy by ID.
+	GetAccessPolicy(ctx context.Context, accountID, appID, policyID string) (*AccessPolicy, error)
+
+	// UpdateAccessPolicy updates an existing Access policy.
+	UpdateAccessPolicy(ctx context.Context, accountID, appID, policyID string, params UpdatePolicyParams) (*AccessPolicy, error)
+
+	// DeleteAccessPolicy deletes an Access policy.
+	DeleteAccessPolicy(ctx context.Context, accountID, appID, policyID string) error
+
+	// ListAccessPolicies lists all Access policies for an application.
+	ListAccessPolicies(ctx context.Context, accountID, appID string) ([]AccessPolicy, error)
+
+	// Access Group operations
+
+	// CreateAccessGroup creates a new Access group.
+	CreateAccessGroup(ctx context.Context, accountID string, params CreateGroupParams) (*AccessGroup, error)
+
+	// GetAccessGroup retrieves an Access group by ID.
+	GetAccessGroup(ctx context.Context, accountID, groupID string) (*AccessGroup, error)
+
+	// UpdateAccessGroup updates an existing Access group.
+	UpdateAccessGroup(ctx context.Context, accountID, groupID string, params UpdateGroupParams) (*AccessGroup, error)
+
+	// DeleteAccessGroup deletes an Access group.
+	DeleteAccessGroup(ctx context.Context, accountID, groupID string) error
+
+	// ListAccessGroups lists all Access groups.
+	ListAccessGroups(ctx context.Context, accountID string) ([]AccessGroup, error)
+
+	// GetAccessGroupByName retrieves an Access group by name.
+	// Returns nil if the group does not exist.
+	GetAccessGroupByName(ctx context.Context, accountID, name string) (*AccessGroup, error)
+
+	// Service Token operations
+
+	// CreateServiceToken creates a new service token.
+	// The returned token includes the client secret, which is only available at creation time.
+	CreateServiceToken(ctx context.Context, accountID string, params CreateServiceTokenParams) (*ServiceTokenWithSecret, error)
+
+	// GetServiceToken retrieves a service token by ID.
+	GetServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceToken, error)
+
+	// UpdateServiceToken updates an existing service token.
+	UpdateServiceToken(ctx context.Context, accountID, tokenID string, params UpdateServiceTokenParams) (*ServiceToken, error)
+
+	// DeleteServiceToken deletes a service token.
+	DeleteServiceToken(ctx context.Context, accountID, tokenID string) error
+
+	// ListServiceTokens lists all service tokens.
+	ListServiceTokens(ctx context.Context, accountID string) ([]ServiceToken, error)
+
+	// RotateServiceToken rotates a service token.
+	// The returned token includes the new client secret.
+	RotateServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceTokenWithSecret, error)
+
+	// RefreshServiceToken refreshes a service token's expiration.
+	RefreshServiceToken(ctx context.Context, accountID, tokenID string) (*ServiceToken, error)
+
+	// mTLS Certificate operations
+
+	// CreateMTLSCertificate creates a new mTLS certificate.
+	CreateMTLSCertificate(ctx context.Context, accountID string, params CreateCertificateParams) (*MTLSCertificate, error)
+
+	// GetMTLSCertificate retrieves an mTLS certificate by ID.
+	GetMTLSCertificate(ctx context.Context, accountID, certID string) (*MTLSCertificate, error)
+
+	// UpdateMTLSCertificate updates an existing mTLS certificate.
+	UpdateMTLSCertificate(ctx context.Context, accountID, certID string, params UpdateCertificateParams) (*MTLSCertificate, error)
+
+	// DeleteMTLSCertificate deletes an mTLS certificate.
+	DeleteMTLSCertificate(ctx context.Context, accountID, certID string) error
+
+	// ListMTLSCertificates lists all mTLS certificates.
+	ListMTLSCertificates(ctx context.Context, accountID string) ([]MTLSCertificate, error)
+
+	// mTLS Certificate Settings (hostname association)
+
+	// GetMTLSCertificateSettings retrieves mTLS certificate settings.
+	GetMTLSCertificateSettings(ctx context.Context, accountID string) ([]CertificateSettings, error)
+
+	// UpdateMTLSCertificateSettings updates mTLS certificate settings.
+	UpdateMTLSCertificateSettings(ctx context.Context, accountID string, settings []CertificateSettingsParam) ([]CertificateSettings, error)
 }
 
 // Tunnel represents a Cloudflare Tunnel.
@@ -246,6 +364,15 @@ type Zone struct {
 
 	// AccountID is the account ID owning the zone.
 	AccountID string
+}
+
+// Account represents a Cloudflare account.
+type Account struct {
+	// ID is the account ID.
+	ID string
+
+	// Name is the account name.
+	Name string
 }
 
 // APIError represents a Cloudflare API error.

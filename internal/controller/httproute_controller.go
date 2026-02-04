@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -14,13 +15,20 @@ import (
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
+	"cfgate.io/cfgate/internal/controller/annotations"
+	"cfgate.io/cfgate/internal/controller/status"
 )
 
 // HTTPRouteReconciler reconciles HTTPRoute resources.
-// It validates routes against Gateway configuration and triggers
-// tunnel configuration syncs when routes change.
+// It validates routes against Gateway configuration, resolves backend
+// Services, checks annotation validity, and resolves CloudflareAccessPolicy
+// references.
 type HTTPRouteReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
@@ -29,9 +37,14 @@ type HTTPRouteReconciler struct {
 
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
+// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflareaccesspolicies,verbs=get;list;watch
 
 // Reconcile handles the reconciliation loop for HTTPRoute resources.
-// It validates the route against parent Gateways and triggers config sync.
+// It validates the route against parent Gateways, validates annotations,
+// resolves backend Services, and resolves CloudflareAccessPolicy references.
 func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 	log.Info("reconciling HTTPRoute", "name", req.Name, "namespace", req.Namespace)
@@ -46,77 +59,46 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, fmt.Errorf("failed to get HTTPRoute: %w", err)
 	}
 
-	// 2. For each parentRef, validate Gateway exists and accepts route
+	// 2. Validate annotations
+	validationResult := annotations.ValidateRouteAnnotations(&route, false /* requireHostname */)
+	for _, warning := range validationResult.Warnings {
+		r.Recorder.Eventf(&route, nil, corev1.EventTypeWarning, "DeprecatedAnnotation", "Validate", warning)
+		log.Info("deprecated annotation detected", "warning", warning)
+	}
+	for _, errMsg := range validationResult.Errors {
+		r.Recorder.Eventf(&route, nil, corev1.EventTypeWarning, "InvalidAnnotation", "Validate", errMsg)
+		log.Info("invalid annotation value", "error", errMsg)
+	}
+
+	// 3. Validate each parentRef
 	var parentStatuses []gwapiv1.RouteParentStatus
-
 	for _, parentRef := range route.Spec.ParentRefs {
-		accepted, reason, err := r.validateParentRef(ctx, &route, parentRef)
-		if err != nil {
-			log.Error(err, "failed to validate parent ref")
-		}
-
-		// Build parent status
-		parentNS := gwapiv1.Namespace(route.Namespace)
-		if parentRef.Namespace != nil {
-			parentNS = *parentRef.Namespace
-		}
-
-		status := gwapiv1.RouteParentStatus{
-			ParentRef: gwapiv1.ParentReference{
-				Group:       parentRef.Group,
-				Kind:        parentRef.Kind,
-				Namespace:   &parentNS,
-				Name:        parentRef.Name,
-				SectionName: parentRef.SectionName,
-			},
-			ControllerName: GatewayControllerName,
-			Conditions: []metav1.Condition{
-				{
-					Type:               string(gwapiv1.RouteConditionAccepted),
-					Status:             metav1.ConditionTrue,
-					Reason:             "Accepted",
-					Message:            "Route accepted by Gateway",
-					LastTransitionTime: metav1.Now(),
-					ObservedGeneration: route.Generation,
-				},
-				{
-					Type:               string(gwapiv1.RouteConditionResolvedRefs),
-					Status:             metav1.ConditionTrue,
-					Reason:             "ResolvedRefs",
-					Message:            "All references resolved",
-					LastTransitionTime: metav1.Now(),
-					ObservedGeneration: route.Generation,
-				},
-			},
-		}
-
-		if !accepted {
-			status.Conditions[0].Status = metav1.ConditionFalse
-			status.Conditions[0].Reason = reason
-			status.Conditions[0].Message = err.Error()
-		}
-
-		parentStatuses = append(parentStatuses, status)
+		parentStatus := r.validateParentRef(ctx, &route, parentRef)
+		parentStatuses = append(parentStatuses, parentStatus)
 	}
 
-	// 3. Resolve backend services
-	if err := r.resolveBackends(ctx, &route); err != nil {
-		log.Error(err, "failed to resolve backends")
-		// Update ResolvedRefs condition
-		for i := range parentStatuses {
-			parentStatuses[i].Conditions[1].Status = metav1.ConditionFalse
-			parentStatuses[i].Conditions[1].Reason = "BackendNotFound"
-			parentStatuses[i].Conditions[1].Message = err.Error()
-		}
-	}
+	// 4. Resolve backend Services
+	resolvedRefsCondition := r.resolveBackends(ctx, &route)
 
-	// 4. Update route status
+	// 5. Resolve access policy reference
+	accessPolicyCondition := r.resolveAccessPolicy(ctx, &route)
+
+	// 6. Update route status - merge conditions into each parent status
+	for i := range parentStatuses {
+		parentStatuses[i].Conditions = status.MergeConditions(
+			parentStatuses[i].Conditions,
+			resolvedRefsCondition,
+			accessPolicyCondition,
+		)
+	}
 	route.Status.Parents = parentStatuses
+
 	if err := r.Status().Update(ctx, &route); err != nil {
 		log.Error(err, "failed to update route status")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	// 7. Emit reconciled event
 	r.Recorder.Eventf(&route, nil, corev1.EventTypeNormal, "Reconciled", "Reconcile", "HTTPRoute reconciled successfully")
 	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
@@ -125,12 +107,161 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwapiv1.HTTPRoute{}).
+		Watches(
+			&gwapiv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.findRoutesForGateway),
+		).
+		Watches(
+			&corev1.Service{},
+			handler.EnqueueRequestsFromMapFunc(r.findRoutesForService),
+		).
+		Watches(
+			&cfgatev1alpha1.CloudflareAccessPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.findRoutesForAccessPolicy),
+		).
 		Complete(r)
 }
 
+// findRoutesForGateway returns HTTPRoutes that reference the given Gateway.
+func (r *HTTPRouteReconciler) findRoutesForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	gateway := obj.(*gwapiv1.Gateway)
+	log := log.FromContext(ctx)
+
+	var routes gwapiv1.HTTPRouteList
+	if err := r.List(ctx, &routes); err != nil {
+		log.Error(err, "failed to list HTTPRoutes")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		for _, ref := range route.Spec.ParentRefs {
+			refNS := route.Namespace
+			if ref.Namespace != nil {
+				refNS = string(*ref.Namespace)
+			}
+			if string(ref.Name) == gateway.Name && refNS == gateway.Namespace {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Name:      route.Name,
+						Namespace: route.Namespace,
+					},
+				})
+				break
+			}
+		}
+	}
+
+	return requests
+}
+
+// findRoutesForService returns HTTPRoutes that reference the given Service.
+func (r *HTTPRouteReconciler) findRoutesForService(ctx context.Context, obj client.Object) []reconcile.Request {
+	svc := obj.(*corev1.Service)
+	log := log.FromContext(ctx)
+
+	var routes gwapiv1.HTTPRouteList
+	if err := r.List(ctx, &routes); err != nil {
+		log.Error(err, "failed to list HTTPRoutes")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		for _, rule := range route.Spec.Rules {
+			for _, backend := range rule.BackendRefs {
+				// Skip non-Service backends
+				if backend.Kind != nil && *backend.Kind != "Service" {
+					continue
+				}
+				backendNS := route.Namespace
+				if backend.Namespace != nil {
+					backendNS = string(*backend.Namespace)
+				}
+				if string(backend.Name) == svc.Name && backendNS == svc.Namespace {
+					requests = append(requests, reconcile.Request{
+						NamespacedName: types.NamespacedName{
+							Name:      route.Name,
+							Namespace: route.Namespace,
+						},
+					})
+					break
+				}
+			}
+		}
+	}
+
+	return requests
+}
+
+// findRoutesForAccessPolicy returns HTTPRoutes that reference the given CloudflareAccessPolicy.
+func (r *HTTPRouteReconciler) findRoutesForAccessPolicy(ctx context.Context, obj client.Object) []reconcile.Request {
+	policy := obj.(*cfgatev1alpha1.CloudflareAccessPolicy)
+	log := log.FromContext(ctx)
+
+	var routes gwapiv1.HTTPRouteList
+	if err := r.List(ctx, &routes); err != nil {
+		log.Error(err, "failed to list HTTPRoutes")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, route := range routes.Items {
+		policyRef := annotations.GetAnnotation(&route, annotations.AnnotationAccessPolicy)
+		if policyRef == "" {
+			continue
+		}
+
+		// Parse namespace/name format
+		policyNS, policyName := parsePolicyRef(policyRef, route.Namespace)
+		if policyName == policy.Name && policyNS == policy.Namespace {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      route.Name,
+					Namespace: route.Namespace,
+				},
+			})
+		}
+	}
+
+	return requests
+}
+
 // validateParentRef validates that the parent Gateway accepts this route.
-// Returns true if the route is accepted by the Gateway.
-func (r *HTTPRouteReconciler) validateParentRef(ctx context.Context, route *gwapiv1.HTTPRoute, ref gwapiv1.ParentReference) (bool, string, error) {
+// Returns a RouteParentStatus with appropriate conditions.
+func (r *HTTPRouteReconciler) validateParentRef(
+	ctx context.Context,
+	route *gwapiv1.HTTPRoute,
+	ref gwapiv1.ParentReference,
+) gwapiv1.RouteParentStatus {
+	log := log.FromContext(ctx)
+
+	// Build base status
+	parentNS := gwapiv1.Namespace(route.Namespace)
+	if ref.Namespace != nil {
+		parentNS = *ref.Namespace
+	}
+
+	parentStatus := gwapiv1.RouteParentStatus{
+		ParentRef: gwapiv1.ParentReference{
+			Group:       ref.Group,
+			Kind:        ref.Kind,
+			Namespace:   &parentNS,
+			Name:        ref.Name,
+			SectionName: ref.SectionName,
+		},
+		ControllerName: GatewayControllerName,
+		Conditions: []metav1.Condition{
+			status.NewCondition(
+				string(gwapiv1.RouteConditionAccepted),
+				metav1.ConditionTrue,
+				"Accepted",
+				"Route accepted by Gateway",
+				route.Generation,
+			),
+		},
+	}
+
 	// Get the Gateway
 	gwNamespace := route.Namespace
 	if ref.Namespace != nil {
@@ -143,28 +274,53 @@ func (r *HTTPRouteReconciler) validateParentRef(ctx context.Context, route *gwap
 		Namespace: gwNamespace,
 	}, &gateway); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, "NoMatchingParent", fmt.Errorf("gateway %s/%s not found", gwNamespace, ref.Name)
+			parentStatus.Conditions[0] = status.NewCondition(
+				string(gwapiv1.RouteConditionAccepted),
+				metav1.ConditionFalse,
+				"NoMatchingParent",
+				fmt.Sprintf("Gateway %s/%s not found", gwNamespace, ref.Name),
+				route.Generation,
+			)
+			return parentStatus
 		}
-		return false, "Error", err
+		log.Error(err, "failed to get Gateway")
+		return parentStatus
 	}
 
 	// Check if Gateway's GatewayClass is ours
 	var gc gwapiv1.GatewayClass
 	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, &gc); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, "NoMatchingParent", fmt.Errorf("gateway class %s not found", gateway.Spec.GatewayClassName)
-		}
-		return false, "Error", err
+		parentStatus.Conditions[0] = status.NewCondition(
+			string(gwapiv1.RouteConditionAccepted),
+			metav1.ConditionFalse,
+			"NoMatchingParent",
+			fmt.Sprintf("GatewayClass %s not found", gateway.Spec.GatewayClassName),
+			route.Generation,
+		)
+		return parentStatus
 	}
 
 	if string(gc.Spec.ControllerName) != GatewayControllerName {
-		// Not our Gateway, skip
-		return false, "NoMatchingParent", fmt.Errorf("gateway is not managed by cfgate")
+		parentStatus.Conditions[0] = status.NewCondition(
+			string(gwapiv1.RouteConditionAccepted),
+			metav1.ConditionFalse,
+			"NoMatchingParent",
+			"Gateway is not managed by cfgate",
+			route.Generation,
+		)
+		return parentStatus
 	}
 
 	// Check if Gateway has tunnel reference
-	if _, ok := gateway.Annotations[AnnotationTunnelRef]; !ok {
-		return false, "NoTunnelRef", fmt.Errorf("gateway has no tunnel reference")
+	if annotations.GetAnnotation(&gateway, annotations.AnnotationTunnelRef) == "" {
+		parentStatus.Conditions[0] = status.NewCondition(
+			string(gwapiv1.RouteConditionAccepted),
+			metav1.ConditionFalse,
+			"NoTunnelRef",
+			"Gateway has no tunnel reference annotation",
+			route.Generation,
+		)
+		return parentStatus
 	}
 
 	// Check listener compatibility if section name specified
@@ -173,15 +329,19 @@ func (r *HTTPRouteReconciler) validateParentRef(ctx context.Context, route *gwap
 		for _, listener := range gateway.Spec.Listeners {
 			if listener.Name == *ref.SectionName {
 				found = true
-				// Check allowed routes
-				if listener.AllowedRoutes != nil {
-					// Check namespace selector
-					if listener.AllowedRoutes.Namespaces != nil {
-						from := listener.AllowedRoutes.Namespaces.From
-						if from != nil && *from == gwapiv1.NamespacesFromSame {
-							if route.Namespace != gateway.Namespace {
-								return false, "NotAllowedByListeners", fmt.Errorf("route namespace not allowed by listener")
-							}
+				// Check allowed routes namespace selector
+				if listener.AllowedRoutes != nil && listener.AllowedRoutes.Namespaces != nil {
+					from := listener.AllowedRoutes.Namespaces.From
+					if from != nil && *from == gwapiv1.NamespacesFromSame {
+						if route.Namespace != gateway.Namespace {
+							parentStatus.Conditions[0] = status.NewCondition(
+								string(gwapiv1.RouteConditionAccepted),
+								metav1.ConditionFalse,
+								"NotAllowedByListeners",
+								"Route namespace not allowed by listener",
+								route.Generation,
+							)
+							return parentStatus
 						}
 					}
 				}
@@ -189,16 +349,28 @@ func (r *HTTPRouteReconciler) validateParentRef(ctx context.Context, route *gwap
 			}
 		}
 		if !found {
-			return false, "NoMatchingListenerHostname", fmt.Errorf("listener %s not found", *ref.SectionName)
+			parentStatus.Conditions[0] = status.NewCondition(
+				string(gwapiv1.RouteConditionAccepted),
+				metav1.ConditionFalse,
+				"NoMatchingListenerHostname",
+				fmt.Sprintf("Listener %s not found", *ref.SectionName),
+				route.Generation,
+			)
+			return parentStatus
 		}
 	}
 
-	return true, "", nil
+	return parentStatus
 }
 
-// resolveBackends resolves backend service references to endpoints.
-// Returns an error if any required backend cannot be resolved.
-func (r *HTTPRouteReconciler) resolveBackends(ctx context.Context, route *gwapiv1.HTTPRoute) error {
+// resolveBackends resolves backend Service references.
+// Returns a ResolvedRefs condition indicating success or failure.
+func (r *HTTPRouteReconciler) resolveBackends(
+	ctx context.Context,
+	route *gwapiv1.HTTPRoute,
+) metav1.Condition {
+	log := log.FromContext(ctx)
+
 	for _, rule := range route.Spec.Rules {
 		for _, backend := range rule.BackendRefs {
 			// Skip non-Service backends
@@ -206,7 +378,7 @@ func (r *HTTPRouteReconciler) resolveBackends(ctx context.Context, route *gwapiv
 				continue
 			}
 
-			// Get the service
+			// Get the Service
 			namespace := route.Namespace
 			if backend.Namespace != nil {
 				namespace = string(*backend.Namespace)
@@ -218,13 +390,116 @@ func (r *HTTPRouteReconciler) resolveBackends(ctx context.Context, route *gwapiv
 				Namespace: namespace,
 			}, &svc); err != nil {
 				if apierrors.IsNotFound(err) {
-					return fmt.Errorf("service %s/%s not found", namespace, backend.Name)
+					log.Info("backend Service not found",
+						"service", backend.Name,
+						"namespace", namespace,
+					)
+					return status.NewCondition(
+						string(gwapiv1.RouteConditionResolvedRefs),
+						metav1.ConditionFalse,
+						"BackendNotFound",
+						fmt.Sprintf("Service %s/%s not found", namespace, backend.Name),
+						route.Generation,
+					)
 				}
-				return fmt.Errorf("failed to get service: %w", err)
+				log.Error(err, "failed to get Service")
+				return status.NewCondition(
+					string(gwapiv1.RouteConditionResolvedRefs),
+					metav1.ConditionFalse,
+					"BackendNotFound",
+					fmt.Sprintf("Failed to get Service %s/%s: %v", namespace, backend.Name, err),
+					route.Generation,
+				)
 			}
 		}
 	}
 
-	return nil
+	return status.NewCondition(
+		string(gwapiv1.RouteConditionResolvedRefs),
+		metav1.ConditionTrue,
+		"ResolvedRefs",
+		"All backend references resolved",
+		route.Generation,
+	)
 }
 
+// resolveAccessPolicy resolves the referenced CloudflareAccessPolicy.
+// Returns a condition indicating the resolution status.
+// If no access-policy annotation is present, returns a success condition.
+func (r *HTTPRouteReconciler) resolveAccessPolicy(
+	ctx context.Context,
+	route *gwapiv1.HTTPRoute,
+) metav1.Condition {
+	log := log.FromContext(ctx)
+
+	policyRef := annotations.GetAnnotation(route, annotations.AnnotationAccessPolicy)
+	if policyRef == "" {
+		// No access policy annotation - this is valid
+		return status.NewCondition(
+			"AccessPolicyResolved",
+			metav1.ConditionTrue,
+			"NoAccessPolicy",
+			"No access policy annotation present",
+			route.Generation,
+		)
+	}
+
+	// Parse namespace/name format
+	policyNS, policyName := parsePolicyRef(policyRef, route.Namespace)
+
+	var policy cfgatev1alpha1.CloudflareAccessPolicy
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      policyName,
+		Namespace: policyNS,
+	}, &policy); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("referenced CloudflareAccessPolicy not found",
+				"policy", policyRef,
+				"parsedNamespace", policyNS,
+				"parsedName", policyName,
+			)
+			r.Recorder.Eventf(route, nil, corev1.EventTypeWarning, "AccessPolicyNotFound", "Resolve",
+				"Referenced CloudflareAccessPolicy %q not found", policyRef)
+			return status.NewCondition(
+				"AccessPolicyResolved",
+				metav1.ConditionFalse,
+				"AccessPolicyNotFound",
+				fmt.Sprintf("CloudflareAccessPolicy %s/%s not found", policyNS, policyName),
+				route.Generation,
+			)
+		}
+		log.Error(err, "failed to get CloudflareAccessPolicy")
+		return status.NewCondition(
+			"AccessPolicyResolved",
+			metav1.ConditionFalse,
+			"AccessPolicyError",
+			fmt.Sprintf("Failed to resolve CloudflareAccessPolicy: %v", err),
+			route.Generation,
+		)
+	}
+
+	log.V(1).Info("resolved access policy",
+		"policy", policyRef,
+		"applicationId", policy.Status.ApplicationID,
+	)
+	r.Recorder.Eventf(route, nil, corev1.EventTypeNormal, "AccessPolicyResolved", "Resolve",
+		"Attached to CloudflareAccessPolicy %q", policyRef)
+
+	return status.NewCondition(
+		"AccessPolicyResolved",
+		metav1.ConditionTrue,
+		"Resolved",
+		fmt.Sprintf("Resolved CloudflareAccessPolicy %s/%s", policyNS, policyName),
+		route.Generation,
+	)
+}
+
+// parsePolicyRef parses a policy reference in "namespace/name" or "name" format.
+// Returns (namespace, name). If no namespace specified, uses defaultNS.
+func parsePolicyRef(ref string, defaultNS string) (string, string) {
+	parts := strings.Split(ref, "/")
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return defaultNS, ref
+}

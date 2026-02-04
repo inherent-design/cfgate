@@ -22,13 +22,16 @@ type TunnelIdentity struct {
 }
 
 // CloudflareConfig defines the Cloudflare API credentials configuration.
+// +kubebuilder:validation:XValidation:rule="has(self.accountId) || has(self.accountName)",message="either accountId or accountName must be specified"
 type CloudflareConfig struct {
-	// AccountID is the Cloudflare Account ID. Required if accountName is not set.
+	// AccountID is the Cloudflare Account ID.
 	// +optional
+	// +kubebuilder:validation:MaxLength=32
 	AccountID string `json:"accountId,omitempty"`
 
 	// AccountName is the Cloudflare Account name. Will be looked up via API.
 	// +optional
+	// +kubebuilder:validation:MaxLength=255
 	AccountName string `json:"accountName,omitempty"`
 
 	// SecretRef references the Secret containing Cloudflare API credentials.
@@ -45,10 +48,13 @@ type CloudflareConfig struct {
 type SecretRef struct {
 	// Name of the secret.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Namespace of the secret. Defaults to the tunnel's namespace.
 	// +optional
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -57,10 +63,13 @@ type SecretRef struct {
 type SecretReference struct {
 	// Name of the secret.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Namespace of the secret. Defaults to the resource's namespace if empty.
 	// +optional
+	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace,omitempty"`
 }
 
@@ -68,6 +77,7 @@ type SecretReference struct {
 type SecretKeys struct {
 	// APIToken is the key name for the Cloudflare API token.
 	// +kubebuilder:default=CLOUDFLARE_API_TOKEN
+	// +kubebuilder:validation:MaxLength=253
 	APIToken string `json:"apiToken,omitempty"`
 }
 
@@ -81,6 +91,7 @@ type CloudflaredConfig struct {
 
 	// Image is the cloudflared container image.
 	// +kubebuilder:default="cloudflare/cloudflared:latest"
+	// +kubebuilder:validation:MaxLength=255
 	Image string `json:"image,omitempty"`
 
 	// ImagePullPolicy is the pull policy for the cloudflared image.
@@ -99,18 +110,22 @@ type CloudflaredConfig struct {
 
 	// NodeSelector is a selector for nodes to run cloudflared on.
 	// +optional
+	// +kubebuilder:validation:MaxProperties=50
 	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
 
 	// Tolerations are tolerations for the cloudflared pods.
 	// +optional
+	// +kubebuilder:validation:MaxItems=20
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// PodAnnotations are annotations to add to cloudflared pods.
 	// +optional
+	// +kubebuilder:validation:MaxProperties=50
 	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 
 	// ExtraArgs are additional arguments to pass to cloudflared.
 	// +optional
+	// +kubebuilder:validation:MaxItems=20
 	ExtraArgs []string `json:"extraArgs,omitempty"`
 
 	// Metrics configures the cloudflared metrics endpoint.
@@ -125,6 +140,8 @@ type MetricsConfig struct {
 	Enabled bool `json:"enabled,omitempty"`
 
 	// Port is the port for the metrics endpoint.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
 	// +kubebuilder:default=44483
 	Port int32 `json:"port,omitempty"`
 }
@@ -133,6 +150,7 @@ type MetricsConfig struct {
 type OriginDefaults struct {
 	// ConnectTimeout is the timeout for connecting to the origin.
 	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Pattern=`^[0-9]+(s|m|h)$`
 	ConnectTimeout string `json:"connectTimeout,omitempty"`
 
 	// NoTLSVerify disables TLS verification for origin connections.
@@ -151,10 +169,14 @@ type OriginDefaults struct {
 // CAPoolSecretRef references a Secret containing CA certificates.
 type CAPoolSecretRef struct {
 	// Name of the secret.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
 
 	// Key is the key within the secret data.
 	// +kubebuilder:default="ca.crt"
+	// +kubebuilder:validation:MaxLength=253
 	Key string `json:"key,omitempty"`
 }
 

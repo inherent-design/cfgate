@@ -28,6 +28,7 @@ import (
 	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
 	"cfgate.io/cfgate/internal/cloudflare"
 	"cfgate.io/cfgate/internal/cloudflared"
+	"cfgate.io/cfgate/internal/controller/annotations"
 )
 
 const (
@@ -37,11 +38,17 @@ const (
 	// ConditionTypeReady indicates the tunnel is fully operational.
 	ConditionTypeReady = "Ready"
 
-	// ConditionTypeTunnelConfigured indicates the tunnel configuration is synced.
-	ConditionTypeTunnelConfigured = "TunnelConfigured"
-
 	// ConditionTypeCredentialsValid indicates the API credentials are valid.
 	ConditionTypeCredentialsValid = "CredentialsValid"
+
+	// ConditionTypeTunnelReady indicates the tunnel exists in Cloudflare.
+	ConditionTypeTunnelReady = "TunnelReady"
+
+	// ConditionTypeCloudflaredDeployed indicates the cloudflared deployment is running.
+	ConditionTypeCloudflaredDeployed = "CloudflaredDeployed"
+
+	// ConditionTypeConfigurationSynced indicates the tunnel configuration is synced.
+	ConditionTypeConfigurationSynced = "ConfigurationSynced"
 
 	// requeueAfterError is the requeue delay after an error.
 	requeueAfterError = 30 * time.Second
@@ -58,6 +65,9 @@ type CloudflareTunnelReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
+	// APIReader provides uncached reads for watch mappers to avoid informer lag.
+	APIReader client.Reader
+
 	// CFClient is the Cloudflare API client. Injected for testing.
 	CFClient cloudflare.Client
 
@@ -71,10 +81,10 @@ type CloudflareTunnelReconciler struct {
 // +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaretunnels,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaretunnels/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaretunnels/finalizers,verbs=update
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes;tcproutes;udproutes,verbs=get;list;watch
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status;httproutes/status;tcproutes/status;udproutes/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
@@ -127,39 +137,46 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// 4. Resolve/create tunnel
 	if err := r.ensureTunnel(ctx, &tunnel); err != nil {
 		log.Error(err, "failed to ensure tunnel")
-		r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionFalse, "TunnelError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeTunnelReady, metav1.ConditionFalse, "TunnelError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionFalse, "TunnelError", "Failed to ensure tunnel")
 		if err := r.updateStatus(ctx, &tunnel); err != nil {
 			log.Error(err, "failed to update status")
 		}
 		r.Recorder.Eventf(&tunnel, nil, corev1.EventTypeWarning, "TunnelError", "Reconcile", "%s", err.Error())
 		return ctrl.Result{RequeueAfter: requeueAfterError}, nil
 	}
+	r.setCondition(&tunnel, ConditionTypeTunnelReady, metav1.ConditionTrue, "TunnelReady", fmt.Sprintf("Tunnel %s ready", tunnel.Status.TunnelID))
 
 	// 5. Deploy cloudflared
 	if err := r.deployCloudflared(ctx, &tunnel); err != nil {
 		log.Error(err, "failed to deploy cloudflared")
-		r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionFalse, "DeploymentError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeCloudflaredDeployed, metav1.ConditionFalse, "DeploymentError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionFalse, "DeploymentError", "Failed to deploy cloudflared")
 		if err := r.updateStatus(ctx, &tunnel); err != nil {
 			log.Error(err, "failed to update status")
 		}
 		r.Recorder.Eventf(&tunnel, nil, corev1.EventTypeWarning, "DeploymentError", "Deploy", "%s", err.Error())
 		return ctrl.Result{RequeueAfter: requeueAfterError}, nil
 	}
+	r.setCondition(&tunnel, ConditionTypeCloudflaredDeployed, metav1.ConditionTrue, "DeploymentReady", "cloudflared deployment ready")
 
 	// 6. Sync configuration
 	if err := r.syncConfiguration(ctx, &tunnel); err != nil {
 		log.Error(err, "failed to sync configuration")
-		r.setCondition(&tunnel, ConditionTypeTunnelConfigured, metav1.ConditionFalse, "ConfigSyncError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeConfigurationSynced, metav1.ConditionFalse, "ConfigSyncError", err.Error())
+		r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionFalse, "ConfigSyncError", "Failed to sync configuration")
 		if err := r.updateStatus(ctx, &tunnel); err != nil {
 			log.Error(err, "failed to update status")
 		}
 		r.Recorder.Eventf(&tunnel, nil, corev1.EventTypeWarning, "ConfigSyncError", "Sync", "%s", err.Error())
 		return ctrl.Result{RequeueAfter: requeueAfterError}, nil
 	}
-	r.setCondition(&tunnel, ConditionTypeTunnelConfigured, metav1.ConditionTrue, "ConfigurationSynced", "Tunnel configuration synced to Cloudflare")
+	r.setCondition(&tunnel, ConditionTypeConfigurationSynced, metav1.ConditionTrue, "ConfigurationSynced", fmt.Sprintf("Configuration synced with %d ingress rules", tunnel.Status.ConnectedRouteCount))
+
+	// Note: DNS management is handled by CloudflareDNS CRD
 
 	// 7. Update status
-	r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionTrue, "TunnelReady", "Tunnel is fully operational")
+	r.setCondition(&tunnel, ConditionTypeReady, metav1.ConditionTrue, "TunnelOperational", "Tunnel is fully operational")
 	tunnel.Status.ObservedGeneration = tunnel.Generation
 	now := metav1.Now()
 	tunnel.Status.LastSyncTime = &now
@@ -176,10 +193,11 @@ func (r *CloudflareTunnelReconciler) Reconcile(ctx context.Context, req ctrl.Req
 // SetupWithManager sets up the controller with the Manager.
 // It configures watches for CloudflareTunnel and owned resources.
 func (r *CloudflareTunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	r.APIReader = mgr.GetAPIReader()
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&cfgatev1alpha1.CloudflareTunnel{}).
 		Owns(&appsv1.Deployment{}).
-		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.Secret{}).
 		// Watch Gateway resources that reference our tunnels
 		Watches(
@@ -240,7 +258,7 @@ func (r *CloudflareTunnelReconciler) findTunnelsForHTTPRoute(ctx context.Context
 		}
 
 		gw := &gateway.Gateway{}
-		if err := r.Get(ctx, types.NamespacedName{
+		if err := r.APIReader.Get(ctx, types.NamespacedName{
 			Namespace: gwNamespace,
 			Name:      string(parentRef.Name),
 		}, gw); err != nil {
@@ -281,7 +299,10 @@ func (r *CloudflareTunnelReconciler) validateCredentials(ctx context.Context, tu
 	}
 
 	// Validate token using operational validation (works for both User and Account tokens)
-	accountID := r.getAccountID(tunnel)
+	accountID, err := r.resolveAccountID(ctx, cfClient, tunnel)
+	if err != nil {
+		return fmt.Errorf("failed to resolve account: %w", err)
+	}
 	if err := cfClient.ValidateToken(ctx, accountID); err != nil {
 		return fmt.Errorf("token validation failed: %w", err)
 	}
@@ -301,7 +322,10 @@ func (r *CloudflareTunnelReconciler) ensureTunnel(ctx context.Context, tunnel *c
 	}
 
 	tunnelService := cloudflare.NewTunnelService(cfClient)
-	accountID := r.getAccountID(tunnel)
+	accountID, err := r.resolveAccountID(ctx, cfClient, tunnel)
+	if err != nil {
+		return fmt.Errorf("failed to resolve account: %w", err)
+	}
 
 	cfTunnel, created, err := tunnelService.EnsureTunnel(ctx, accountID, tunnel.Spec.Tunnel.Name)
 	if err != nil {
@@ -341,7 +365,10 @@ func (r *CloudflareTunnelReconciler) deployCloudflared(ctx context.Context, tunn
 	}
 
 	tunnelService := cloudflare.NewTunnelService(cfClient)
-	accountID := r.getAccountID(tunnel)
+	accountID, err := r.resolveAccountID(ctx, cfClient, tunnel)
+	if err != nil {
+		return fmt.Errorf("failed to resolve account: %w", err)
+	}
 
 	token, err := tunnelService.GetToken(ctx, accountID, tunnel.Status.TunnelID)
 	if err != nil {
@@ -465,7 +492,10 @@ func (r *CloudflareTunnelReconciler) syncConfiguration(ctx context.Context, tunn
 	}
 
 	tunnelService := cloudflare.NewTunnelService(cfClient)
-	accountID := r.getAccountID(tunnel)
+	accountID, err := r.resolveAccountID(ctx, cfClient, tunnel)
+	if err != nil {
+		return fmt.Errorf("failed to resolve account: %w", err)
+	}
 
 	if err := tunnelService.UpdateConfiguration(ctx, accountID, tunnel.Status.TunnelID, config); err != nil {
 		// Check for 404 - tunnel not found on Cloudflare side
@@ -505,7 +535,7 @@ func (r *CloudflareTunnelReconciler) collectIngressRules(ctx context.Context, tu
 	var relevantGateways []gateway.Gateway
 
 	for _, gw := range gateways.Items {
-		if ref, ok := gw.Annotations[AnnotationTunnelRef]; ok && ref == tunnelRef {
+		if ref, ok := gw.Annotations[annotations.AnnotationTunnelRef]; ok && ref == tunnelRef {
 			relevantGateways = append(relevantGateways, gw)
 		}
 	}
@@ -599,6 +629,8 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 		return ctrl.Result{}, nil
 	}
 
+	// Note: DNS cleanup is handled by CloudflareDNS CRD reconciler
+
 	// Check deletion policy
 	deletionPolicy := tunnel.Annotations["cfgate.io/deletion-policy"]
 	if deletionPolicy == "orphan" {
@@ -615,9 +647,17 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 			// Continue with finalizer removal - don't block deletion
 		} else {
 			tunnelService := cloudflare.NewTunnelService(cfClient)
-			accountID := r.getAccountID(tunnel)
+			accountID, err := r.resolveAccountID(ctx, cfClient, tunnel)
+			if err != nil {
+				log.Error(err, "failed to resolve account for deletion, using cached accountID")
+				accountID = tunnel.Status.AccountID // Use cached value from status
+			}
 
-			if err := tunnelService.Delete(ctx, accountID, tunnel.Status.TunnelID); err != nil {
+			if accountID == "" {
+				log.Error(nil, "no account ID available for deletion, tunnel may be orphaned")
+				r.Recorder.Eventf(tunnel, nil, corev1.EventTypeWarning, "TunnelOrphanedNoAccountID", "Delete",
+					"Tunnel %s may be orphaned on Cloudflare: no account ID", tunnel.Status.TunnelID)
+			} else if err := tunnelService.Delete(ctx, accountID, tunnel.Status.TunnelID); err != nil {
 				log.Error(err, "failed to delete tunnel from Cloudflare")
 				r.Recorder.Eventf(tunnel, nil, corev1.EventTypeWarning, "TunnelDeleteError", "Delete", "%s", err.Error())
 				// Continue with finalizer removal
@@ -751,9 +791,32 @@ func (r *CloudflareTunnelReconciler) getCloudflareClientForDeletion(ctx context.
 	return cloudflare.NewClient(string(token))
 }
 
-// getAccountID returns the Cloudflare account ID from the tunnel spec.
-func (r *CloudflareTunnelReconciler) getAccountID(tunnel *cfgatev1alpha1.CloudflareTunnel) string {
-	return tunnel.Spec.Cloudflare.AccountID
+// resolveAccountID returns the Cloudflare account ID, resolving from accountName if needed.
+// Priority: spec.cloudflare.accountId > status.accountId (cached) > resolve from accountName
+func (r *CloudflareTunnelReconciler) resolveAccountID(ctx context.Context, cfClient cloudflare.Client, tunnel *cfgatev1alpha1.CloudflareTunnel) (string, error) {
+	// If accountId is explicitly set in spec, use it
+	if tunnel.Spec.Cloudflare.AccountID != "" {
+		return tunnel.Spec.Cloudflare.AccountID, nil
+	}
+
+	// If we already resolved it, return cached value from status
+	if tunnel.Status.AccountID != "" {
+		return tunnel.Status.AccountID, nil
+	}
+
+	// Resolve accountName to accountId via API
+	if tunnel.Spec.Cloudflare.AccountName != "" {
+		account, err := cfClient.GetAccountByName(ctx, tunnel.Spec.Cloudflare.AccountName)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve account name %q: %w", tunnel.Spec.Cloudflare.AccountName, err)
+		}
+		if account == nil {
+			return "", fmt.Errorf("account %q not found", tunnel.Spec.Cloudflare.AccountName)
+		}
+		return account.ID, nil
+	}
+
+	return "", fmt.Errorf("neither accountId nor accountName specified")
 }
 
 // setCondition sets a condition on the tunnel status.

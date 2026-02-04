@@ -4,17 +4,17 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.0
-  name: cloudflarednssyncs.cfgate.io
+  name: cloudflarednses.cfgate.io
 spec:
   group: cfgate.io
   names:
-    kind: CloudflareDNSSync
-    listKind: CloudflareDNSSyncList
-    plural: cloudflarednssyncs
+    kind: CloudflareDNS
+    listKind: CloudflareDNSList
+    plural: cloudflarednses
     shortNames:
     - cfdns
-    - dnsync
-    singular: cloudflarednssync
+    - dns
+    singular: cloudflaredns
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -37,8 +37,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          CloudflareDNSSync is the Schema for the cloudflarednssyncs API.
-          It manages DNS records for CloudflareTunnel resources.
+          CloudflareDNS is the Schema for the cloudflaredns API.
+          It manages DNS records independently from CloudflareTunnel resources.
         properties:
           apiVersion:
             description: |-
@@ -58,27 +58,75 @@ spec:
           metadata:
             type: object
           spec:
-            description: CloudflareDNSSyncSpec defines the desired state of CloudflareDNSSync.
+            description: CloudflareDNSSpec defines the desired state of CloudflareDNS.
             properties:
               cleanupPolicy:
                 description: CleanupPolicy defines cleanup behavior for records.
                 properties:
                   deleteOnResourceRemoval:
-                    default: true
-                    description: DeleteOnResourceRemoval deletes records when the
-                      DNSSync resource is deleted.
+                    description: |-
+                      DeleteOnResourceRemoval deletes records when CloudflareDNS resource is deleted.
+                      nil defaults to true.
                     type: boolean
                   deleteOnRouteRemoval:
-                    default: true
-                    description: DeleteOnRouteRemoval deletes records when the route
-                      is deleted.
+                    description: |-
+                      DeleteOnRouteRemoval deletes records when the source route is deleted.
+                      nil defaults to true.
                     type: boolean
                   onlyManaged:
-                    default: true
-                    description: OnlyManaged only deletes records that were created
-                      by cfgate.
+                    description: |-
+                      OnlyManaged only deletes records that were created by cfgate (verified via ownership).
+                      nil defaults to true.
                     type: boolean
                 type: object
+              cloudflare:
+                description: |-
+                  Cloudflare API credentials (required when using externalTarget).
+                  When using tunnelRef, credentials are inherited from the tunnel.
+                properties:
+                  accountId:
+                    description: AccountID is the Cloudflare Account ID.
+                    maxLength: 32
+                    type: string
+                  accountName:
+                    description: AccountName is the Cloudflare Account name. Will
+                      be looked up via API.
+                    maxLength: 255
+                    type: string
+                  secretKeys:
+                    description: SecretKeys defines the key mappings within the secret.
+                    properties:
+                      apiToken:
+                        default: CLOUDFLARE_API_TOKEN
+                        description: APIToken is the key name for the Cloudflare API
+                          token.
+                        maxLength: 253
+                        type: string
+                    type: object
+                  secretRef:
+                    description: |-
+                      SecretRef references the Secret containing Cloudflare API credentials.
+                      The secret must contain an API token (not tunnel token).
+                    properties:
+                      name:
+                        description: Name of the secret.
+                        maxLength: 253
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the secret. Defaults to the tunnel's
+                          namespace.
+                        maxLength: 63
+                        type: string
+                    required:
+                    - name
+                    type: object
+                required:
+                - secretRef
+                type: object
+                x-kubernetes-validations:
+                - message: either accountId or accountName must be specified
+                  rule: has(self.accountId) || has(self.accountName)
               defaults:
                 description: Defaults defines default settings for DNS records.
                 properties:
@@ -87,23 +135,61 @@ spec:
                     description: Proxied enables Cloudflare proxy by default.
                     type: boolean
                   ttl:
-                    default: auto
-                    description: TTL is the default DNS record TTL.
-                    type: string
+                    default: 1
+                    description: |-
+                      TTL is the default DNS record TTL in seconds.
+                      Valid values: 1 (auto) or 60-86400 (explicit).
+                    format: int32
+                    maximum: 86400
+                    minimum: 1
+                    type: integer
                 type: object
+                x-kubernetes-validations:
+                - message: TTL must be 1 (auto) or between 60 and 86400 seconds
+                  rule: '!has(self.ttl) || self.ttl == 1 || (self.ttl >= 60 && self.ttl
+                    <= 86400)'
+              externalTarget:
+                description: ExternalTarget specifies a non-tunnel DNS target.
+                properties:
+                  type:
+                    allOf:
+                    - enum:
+                      - CNAME
+                      - A
+                      - AAAA
+                    - enum:
+                      - CNAME
+                      - A
+                      - AAAA
+                    description: Type is the DNS record type.
+                    type: string
+                  value:
+                    description: Value is the target value (domain for CNAME, IP for
+                      A/AAAA).
+                    maxLength: 255
+                    minLength: 1
+                    type: string
+                required:
+                - type
+                - value
+                type: object
+                x-kubernetes-validations:
+                - message: type must be CNAME, A, or AAAA
+                  rule: self.type == 'CNAME' || self.type == 'A' || self.type == 'AAAA'
               fallbackCredentialsRef:
                 description: |-
-                  FallbackCredentialsRef references a secret containing fallback Cloudflare API credentials.
-                  Used during deletion when the referenced tunnel's credentials are unavailable.
-                  This enables cleanup of DNS records even if the tunnel or its secret is deleted.
-                  The secret must contain CLOUDFLARE_API_TOKEN key.
+                  FallbackCredentialsRef references fallback Cloudflare API credentials.
+                  Used during deletion when primary credentials are unavailable.
                 properties:
                   name:
                     description: Name of the secret.
+                    maxLength: 253
+                    minLength: 1
                     type: string
                   namespace:
                     description: Namespace of the secret. Defaults to the resource's
                       namespace if empty.
+                    maxLength: 63
                     type: string
                 required:
                 - name
@@ -119,53 +205,89 @@ spec:
                         description: Enabled enables comment-based ownership tracking.
                         type: boolean
                       template:
-                        default: managed by cfgate, tunnel={{ .TunnelName }}
-                        description: Template is the comment template. Supports template
-                          variables.
+                        default: managed by cfgate
+                        description: Template is the comment template.
+                        maxLength: 255
                         type: string
                     type: object
+                  ownerId:
+                    description: |-
+                      OwnerID is the cluster/installation identifier used in TXT ownership records.
+                      Used to distinguish records created by different cfgate installations.
+                      Defaults to the CloudflareDNS resource's namespace/name if not specified.
+                    maxLength: 253
+                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(/[a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
+                    type: string
                   txtRecord:
                     description: TXTRecord configures TXT record-based ownership.
                     properties:
                       enabled:
-                        default: true
-                        description: Enabled enables TXT record ownership tracking.
+                        description: |-
+                          Enabled enables TXT record ownership tracking.
+                          nil defaults to true.
                         type: boolean
                       prefix:
                         default: _cfgate
                         description: Prefix is the prefix for TXT record names.
+                        maxLength: 63
                         type: string
                     type: object
                 type: object
+              policy:
+                allOf:
+                - enum:
+                  - sync
+                  - upsert-only
+                  - create-only
+                - enum:
+                  - sync
+                  - upsert-only
+                  - create-only
+                default: sync
+                description: Policy controls DNS record lifecycle.
+                type: string
               source:
                 description: Source defines where to get hostnames to sync.
                 properties:
                   explicit:
                     description: Explicit defines explicit hostnames to sync.
                     items:
-                      description: ExplicitHostname defines an explicit hostname to
-                        sync.
+                      description: DNSExplicitHostname defines an explicit hostname
+                        to sync.
                       properties:
                         hostname:
                           description: Hostname is the DNS hostname to create.
+                          maxLength: 255
+                          minLength: 1
                           type: string
                         proxied:
-                          default: true
-                          description: Proxied enables Cloudflare proxy for this record.
+                          description: |-
+                            Proxied enables Cloudflare proxy for this record.
+                            nil inherits from zone or defaults.
                           type: boolean
                         target:
-                          description: Target is the CNAME target. Supports template
-                            variable {{ .TunnelDomain }}.
+                          description: |-
+                            Target is the CNAME target. Supports template variable {{ .TunnelDomain }}.
+                            Defaults to tunnel domain when tunnelRef is specified.
+                          maxLength: 255
                           type: string
                         ttl:
-                          default: auto
-                          description: TTL is the DNS record TTL. Use "auto" for Cloudflare
-                            automatic TTL.
-                          type: string
+                          default: 1
+                          description: |-
+                            TTL is the DNS record TTL in seconds. 1 means auto (Cloudflare managed).
+                            Valid values: 1 (auto) or 60-86400 (explicit).
+                          format: int32
+                          maximum: 86400
+                          minimum: 1
+                          type: integer
                       required:
                       - hostname
-                      - target
                       type: object
+                      x-kubernetes-validations:
+                      - message: TTL must be 1 (auto) or between 60 and 86400 seconds
+                        rule: '!has(self.ttl) || self.ttl == 1 || (self.ttl >= 60
+                          && self.ttl <= 86400)'
+                    maxItems: 100
                     type: array
                   gatewayRoutes:
                     description: GatewayRoutes configures watching Gateway API routes.
@@ -173,24 +295,49 @@ spec:
                       annotationFilter:
                         description: AnnotationFilter only syncs routes with this
                           annotation.
+                        maxLength: 255
                         type: string
                       enabled:
                         default: true
                         description: Enabled enables watching Gateway API routes.
                         type: boolean
+                      namespaceSelector:
+                        description: NamespaceSelector limits route discovery to specific
+                          namespaces.
+                        properties:
+                          matchLabels:
+                            additionalProperties:
+                              type: string
+                            description: MatchLabels selects namespaces with matching
+                              labels.
+                            maxProperties: 10
+                            type: object
+                          matchNames:
+                            description: MatchNames selects namespaces by name.
+                            items:
+                              type: string
+                            maxItems: 50
+                            type: array
+                        type: object
+                        x-kubernetes-validations:
+                        - message: at least one selector must be specified
+                          rule: has(self.matchLabels) || has(self.matchNames)
                     type: object
                 type: object
               tunnelRef:
-                description: TunnelRef references the CloudflareTunnel to sync DNS
-                  for.
+                description: TunnelRef references a CloudflareTunnel for CNAME target
+                  resolution.
                 properties:
                   name:
                     description: Name is the name of the CloudflareTunnel.
+                    maxLength: 63
+                    minLength: 1
                     type: string
                   namespace:
                     description: |-
                       Namespace is the namespace of the CloudflareTunnel.
-                      Defaults to the CloudflareDNSSync's namespace.
+                      Defaults to the CloudflareDNS's namespace.
+                    maxLength: 63
                     type: string
                 required:
                 - name
@@ -198,27 +345,44 @@ spec:
               zones:
                 description: Zones defines the DNS zones to manage.
                 items:
-                  description: ZoneConfig defines a DNS zone to manage.
+                  description: DNSZoneConfig defines a DNS zone to manage.
                   properties:
                     id:
-                      description: ID is the optional explicit zone ID (skips lookup).
+                      description: ID is the optional explicit zone ID (skips API
+                        lookup).
+                      maxLength: 32
                       type: string
                     name:
-                      description: Name is the zone name (e.g., example.com).
+                      description: Name is the zone domain name (e.g., example.com).
+                      maxLength: 255
+                      minLength: 1
                       type: string
+                    proxied:
+                      description: |-
+                        Proxied sets the default proxied setting for this zone.
+                        nil inherits from spec.defaults.proxied.
+                      type: boolean
                   required:
                   - name
                   type: object
+                maxItems: 10
+                minItems: 1
                 type: array
             required:
-            - tunnelRef
+            - zones
             type: object
+            x-kubernetes-validations:
+            - message: either tunnelRef or externalTarget must be specified
+              rule: has(self.tunnelRef) || has(self.externalTarget)
+            - message: tunnelRef and externalTarget are mutually exclusive
+              rule: '!(has(self.tunnelRef) && has(self.externalTarget))'
+            - message: cloudflare credentials required when using externalTarget
+              rule: has(self.tunnelRef) || has(self.cloudflare)
           status:
-            description: CloudflareDNSSyncStatus defines the observed state of CloudflareDNSSync.
+            description: CloudflareDNSStatus defines the observed state of CloudflareDNS.
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the sync's state.
+                description: Conditions represent the latest available observations.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -298,8 +462,8 @@ spec:
               records:
                 description: Records contains the status of individual DNS records.
                 items:
-                  description: DNSRecordStatus represents the status of a single DNS
-                    record.
+                  description: DNSRecordSyncStatus represents the status of a single
+                    DNS record.
                   properties:
                     error:
                       description: Error contains the error message if status is Failed.
@@ -319,8 +483,16 @@ spec:
                     target:
                       description: Target is the record target/content.
                       type: string
+                    ttl:
+                      description: TTL is the record TTL.
+                      format: int32
+                      type: integer
                     type:
-                      description: Type is the DNS record type (e.g., CNAME).
+                      description: Type is the DNS record type (CNAME, A, AAAA).
+                      type: string
+                    zoneId:
+                      description: ZoneID is the Cloudflare zone ID where the record
+                        was created.
                       type: string
                   required:
                   - hostname
@@ -329,7 +501,12 @@ spec:
                   - target
                   - type
                   type: object
+                maxItems: 1000
                 type: array
+              resolvedTarget:
+                description: ResolvedTarget is the resolved CNAME target (tunnel domain
+                  or external value).
+                type: string
               syncedRecords:
                 description: SyncedRecords is the number of successfully synced records.
                 format: int32

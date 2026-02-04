@@ -41,7 +41,9 @@ import (
 	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
 	"cfgate.io/cfgate/internal/cloudflared"
 	"cfgate.io/cfgate/internal/controller"
+	"cfgate.io/cfgate/internal/controller/features"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1b1 "sigs.k8s.io/gateway-api/apis/v1beta1"
 )
 
 // Environment variables for E2E tests.
@@ -49,6 +51,9 @@ const (
 	EnvCloudflareAPIToken  = "CLOUDFLARE_API_TOKEN"
 	EnvCloudflareAccountID = "CLOUDFLARE_ACCOUNT_ID"
 	EnvCloudflareZoneName  = "CLOUDFLARE_ZONE_NAME"
+	EnvCloudflareIdPID     = "CLOUDFLARE_IDP_ID"
+	EnvCloudflareTestEmail = "CLOUDFLARE_TEST_EMAIL"
+	EnvCloudflareTestGroup = "CLOUDFLARE_TEST_GROUP"
 	EnvSkipCleanup         = "E2E_SKIP_CLEANUP"
 	EnvUseExistingCluster  = "E2E_USE_EXISTING_CLUSTER"
 	EnvKubeconfig          = "KUBECONFIG"
@@ -84,6 +89,9 @@ var (
 
 	// mgrCancel cancels the manager context.
 	mgrCancel context.CancelFunc
+
+	// featureGates tracks optional Gateway API CRD availability.
+	featureGates *features.FeatureGates
 )
 
 // E2ETestEnv holds the E2E test environment configuration.
@@ -96,6 +104,15 @@ type E2ETestEnv struct {
 
 	// CloudflareZoneName is the Cloudflare zone for DNS tests.
 	CloudflareZoneName string
+
+	// CloudflareIdPID is the Cloudflare Identity Provider ID for IdP-dependent tests.
+	CloudflareIdPID string
+
+	// CloudflareTestEmail is a test email for email rule verification.
+	CloudflareTestEmail string
+
+	// CloudflareTestGroup is a test group for GSuite group rule verification.
+	CloudflareTestGroup string
 
 	// SkipCleanup skips resource cleanup for debugging.
 	SkipCleanup bool
@@ -130,6 +147,7 @@ var _ = BeforeSuite(func() {
 	Expect(clientgoscheme.AddToScheme(scheme)).To(Succeed())
 	Expect(cfgatev1alpha1.AddToScheme(scheme)).To(Succeed())
 	Expect(gatewayv1.Install(scheme)).To(Succeed())
+	Expect(gatewayv1b1.Install(scheme)).To(Succeed())
 
 	// Load environment configuration.
 	testEnv = loadTestEnv()
@@ -180,6 +198,14 @@ var _ = AfterSuite(func() {
 
 	cancel()
 })
+
+// testID generates a deterministic resource name based on Ginkgo node for parallel safety.
+// Format: e2e-{type}-{node}-{line}
+// Cleanup relies on these patterns - all e2e-* resources are batch-deleted in AfterSuite.
+func testID(resourceType string) string {
+	specIndex := CurrentSpecReport().LeafNodeLocation.LineNumber
+	return fmt.Sprintf("e2e-%s-%d-%d", resourceType, GinkgoParallelProcess(), specIndex)
+}
 
 // cleanOrphanedTestNamespaces removes any test namespaces that weren't cleaned up.
 // Must be called BEFORE stopping the controller manager so finalizers can be processed.
@@ -232,15 +258,29 @@ func removeCfgateFinalizersInNamespace(namespace string) {
 		}
 	}
 
-	// Remove finalizers from CloudflareDNSSyncs.
-	var syncs cfgatev1alpha1.CloudflareDNSSyncList
-	if err := k8sClient.List(ctx, &syncs, client.InNamespace(namespace)); err == nil {
-		for i := range syncs.Items {
-			if len(syncs.Items[i].Finalizers) > 0 {
-				syncs.Items[i].Finalizers = nil
-				if err := k8sClient.Update(ctx, &syncs.Items[i]); err != nil && !apierrors.IsNotFound(err) {
-					GinkgoWriter.Printf("Warning: failed to remove finalizers from dnssync %s: %v\n",
-						syncs.Items[i].Name, err)
+	// Remove finalizers from CloudflareDNS (alpha.3: separate CRD).
+	var dnsResources cfgatev1alpha1.CloudflareDNSList
+	if err := k8sClient.List(ctx, &dnsResources, client.InNamespace(namespace)); err == nil {
+		for i := range dnsResources.Items {
+			if len(dnsResources.Items[i].Finalizers) > 0 {
+				dnsResources.Items[i].Finalizers = nil
+				if err := k8sClient.Update(ctx, &dnsResources.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+					GinkgoWriter.Printf("Warning: failed to remove finalizers from dns %s: %v\n",
+						dnsResources.Items[i].Name, err)
+				}
+			}
+		}
+	}
+
+	// Remove finalizers from CloudflareAccessPolicies (alpha.3).
+	var policies cfgatev1alpha1.CloudflareAccessPolicyList
+	if err := k8sClient.List(ctx, &policies, client.InNamespace(namespace)); err == nil {
+		for i := range policies.Items {
+			if len(policies.Items[i].Finalizers) > 0 {
+				policies.Items[i].Finalizers = nil
+				if err := k8sClient.Update(ctx, &policies.Items[i]); err != nil && !apierrors.IsNotFound(err) {
+					GinkgoWriter.Printf("Warning: failed to remove finalizers from access policy %s: %v\n",
+						policies.Items[i].Name, err)
 				}
 			}
 		}
@@ -249,7 +289,8 @@ func removeCfgateFinalizersInNamespace(namespace string) {
 
 // cleanOrphanedE2EResources deletes all E2E test resources from Cloudflare.
 // This is the primary cleanup mechanism - runs after all tests complete.
-// Cleans: tunnels (e2e-*, recovery-*) and DNS records (e2e-*, _cfgate.e2e-*).
+// Cleans: tunnels (e2e-*, recovery-*), DNS records (e2e-*, _cfgate.e2e-*),
+// Access applications (e2e-*), and service tokens (e2e-*).
 func cleanOrphanedE2EResources() {
 	By("Cleaning orphaned E2E resources from Cloudflare")
 
@@ -264,6 +305,12 @@ func cleanOrphanedE2EResources() {
 	if testEnv.CloudflareZoneName != "" {
 		cleanOrphanedDNSRecords(cleanupCtx, cfClient)
 	}
+
+	// Clean Access applications (alpha.3).
+	cleanOrphanedAccessApplications(cleanupCtx, cfClient)
+
+	// Clean service tokens (alpha.3).
+	cleanOrphanedServiceTokens(cleanupCtx, cfClient)
 }
 
 // cleanOrphanedTunnels deletes e2e-* and recovery-* tunnels.
@@ -351,12 +398,87 @@ func cleanOrphanedDNSRecords(ctx context.Context, cfClient *cloudflare.Client) {
 	}
 }
 
+// cleanOrphanedAccessApplications deletes e2e-* Access applications.
+func cleanOrphanedAccessApplications(ctx context.Context, cfClient *cloudflare.Client) {
+	iter := cfClient.ZeroTrust.Access.Applications.ListAutoPaging(ctx, zero_trust.AccessApplicationListParams{
+		AccountID: cloudflare.F(testEnv.CloudflareAccountID),
+	})
+
+	var orphaned []struct{ ID, Name string }
+	for iter.Next() {
+		app := iter.Current()
+		// Match e2e-* application names.
+		if strings.HasPrefix(app.Name, "e2e-") {
+			orphaned = append(orphaned, struct{ ID, Name string }{app.ID, app.Name})
+		}
+	}
+
+	if err := iter.Err(); err != nil {
+		GinkgoWriter.Printf("Warning: failed to list Access applications: %v\n", err)
+		return
+	}
+
+	if len(orphaned) == 0 {
+		GinkgoWriter.Printf("No orphaned Access applications found\n")
+		return
+	}
+
+	GinkgoWriter.Printf("Deleting %d orphaned Access applications\n", len(orphaned))
+	for _, app := range orphaned {
+		_, err := cfClient.ZeroTrust.Access.Applications.Delete(ctx, app.ID, zero_trust.AccessApplicationDeleteParams{
+			AccountID: cloudflare.F(testEnv.CloudflareAccountID),
+		})
+		if err != nil && !strings.Contains(err.Error(), "not found") {
+			GinkgoWriter.Printf("  Warning: %s: %v\n", app.Name, err)
+		}
+	}
+}
+
+// cleanOrphanedServiceTokens deletes e2e-* service tokens.
+func cleanOrphanedServiceTokens(ctx context.Context, cfClient *cloudflare.Client) {
+	iter := cfClient.ZeroTrust.Access.ServiceTokens.ListAutoPaging(ctx, zero_trust.AccessServiceTokenListParams{
+		AccountID: cloudflare.F(testEnv.CloudflareAccountID),
+	})
+
+	var orphaned []struct{ ID, Name string }
+	for iter.Next() {
+		token := iter.Current()
+		// Match e2e-* token names.
+		if strings.HasPrefix(token.Name, "e2e-") {
+			orphaned = append(orphaned, struct{ ID, Name string }{token.ID, token.Name})
+		}
+	}
+
+	if err := iter.Err(); err != nil {
+		GinkgoWriter.Printf("Warning: failed to list service tokens: %v\n", err)
+		return
+	}
+
+	if len(orphaned) == 0 {
+		GinkgoWriter.Printf("No orphaned service tokens found\n")
+		return
+	}
+
+	GinkgoWriter.Printf("Deleting %d orphaned service tokens\n", len(orphaned))
+	for _, token := range orphaned {
+		_, err := cfClient.ZeroTrust.Access.ServiceTokens.Delete(ctx, token.ID, zero_trust.AccessServiceTokenDeleteParams{
+			AccountID: cloudflare.F(testEnv.CloudflareAccountID),
+		})
+		if err != nil && !strings.Contains(err.Error(), "not found") {
+			GinkgoWriter.Printf("  Warning: %s: %v\n", token.Name, err)
+		}
+	}
+}
+
 // loadTestEnv loads the test environment from environment variables.
 func loadTestEnv() *E2ETestEnv {
 	env := &E2ETestEnv{
 		CloudflareAPIToken:  os.Getenv(EnvCloudflareAPIToken),
 		CloudflareAccountID: os.Getenv(EnvCloudflareAccountID),
 		CloudflareZoneName:  os.Getenv(EnvCloudflareZoneName),
+		CloudflareIdPID:     os.Getenv(EnvCloudflareIdPID),
+		CloudflareTestEmail: os.Getenv(EnvCloudflareTestEmail),
+		CloudflareTestGroup: os.Getenv(EnvCloudflareTestGroup),
 		SkipCleanup:         os.Getenv(EnvSkipCleanup) == "true",
 		UseExistingCluster:  os.Getenv(EnvUseExistingCluster) == "true",
 		KindClusterName:     fmt.Sprintf("cfgate-e2e-%d", time.Now().Unix()),
@@ -496,14 +618,36 @@ func installCRDs() {
 	cmd.Stderr = GinkgoWriter
 	Expect(cmd.Run()).To(Succeed(), "Failed to install Gateway API CRDs")
 
-	// Wait for CRDs to be established.
-	Eventually(func() error {
+	// Wait for ALL cfgate CRDs to be established.
+	// This prevents race conditions where the controller starts before
+	// CRD API discovery is complete.
+	Eventually(func() bool {
+		// Check CloudflareTunnel API registration
 		tunnel := &cfgatev1alpha1.CloudflareTunnel{}
-		return k8sClient.Get(ctx, client.ObjectKey{Name: "test", Namespace: "default"}, tunnel)
-	}, 30*time.Second, 1*time.Second).Should(Or(
-		Succeed(),
-		MatchError(ContainSubstring("not found")),
-	), "CRDs not ready")
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: "test", Namespace: "default"}, tunnel); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false // API not ready (kind not registered)
+			}
+		}
+
+		// Check CloudflareDNS API registration
+		dns := &cfgatev1alpha1.CloudflareDNS{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: "test", Namespace: "default"}, dns); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false // API not ready (kind not registered)
+			}
+		}
+
+		// Check CloudflareAccessPolicy API registration
+		policy := &cfgatev1alpha1.CloudflareAccessPolicy{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: "test", Namespace: "default"}, policy); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return false // API not ready (kind not registered)
+			}
+		}
+
+		return true
+	}, 30*time.Second, 1*time.Second).Should(BeTrue(), "cfgate CRDs not fully registered in API server")
 }
 
 // startController starts the controller manager in-process.
@@ -523,8 +667,10 @@ func startController() {
 	})
 	Expect(err).NotTo(HaveOccurred(), "Failed to create manager")
 
-	// Create Cloudflare client factory (creates client per reconcile using credentials from Secret).
-	// For E2E tests, the controller will read credentials from the Secret in each namespace.
+	// Detect feature gates (optional Gateway API CRDs).
+	featureGates, err = features.DetectFeatures(k8sClientset.Discovery())
+	Expect(err).NotTo(HaveOccurred(), "Failed to detect feature gates")
+	featureGates.LogFeatures(ctrl.Log.WithName("e2e"))
 
 	// Set up CloudflareTunnel controller.
 	tunnelReconciler := &controller.CloudflareTunnelReconciler{
@@ -535,13 +681,30 @@ func startController() {
 	}
 	Expect(tunnelReconciler.SetupWithManager(mgr)).To(Succeed(), "Failed to setup tunnel controller")
 
-	// Set up CloudflareDNSSync controller.
-	dnsReconciler := &controller.CloudflareDNSSyncReconciler{
+	// CloudflareDNS controller (alpha.3: separate CRD).
+	dnsReconciler := &controller.CloudflareDNSReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorder("cloudflarednsync-controller"),
+		Recorder: mgr.GetEventRecorder("cloudflaredns-controller"),
 	}
 	Expect(dnsReconciler.SetupWithManager(mgr)).To(Succeed(), "Failed to setup DNS controller")
+
+	// CloudflareAccessPolicy controller.
+	accessReconciler := &controller.CloudflareAccessPolicyReconciler{
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("cloudflareaccesspolicy-controller"),
+		FeatureGates: featureGates,
+	}
+	Expect(accessReconciler.SetupWithManager(mgr)).To(Succeed(), "Failed to setup access policy controller")
+
+	// HTTPRoute controller.
+	httpRouteReconciler := &controller.HTTPRouteReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("httproute-controller"),
+	}
+	Expect(httpRouteReconciler.SetupWithManager(mgr)).To(Succeed(), "Failed to setup HTTPRoute controller")
 
 	// Start manager in background.
 	go func() {
@@ -573,16 +736,33 @@ func createTestNamespace(prefix string) *corev1.Namespace {
 }
 
 // deleteTestNamespace deletes a test namespace and waits for termination.
-// Let controller finalizers handle Cloudflare resource deletion.
+// Explicitly deletes CloudflareTunnel CRs first so finalizers can access credentials.
 func deleteTestNamespace(ns *corev1.Namespace) {
 	if testEnv.SkipCleanup {
 		return
 	}
 
-	// Delete namespace - controller finalizers will clean up Cloudflare resources.
+	// Delete CloudflareTunnels first - finalizers need the Secret which lives in namespace.
+	var tunnels cfgatev1alpha1.CloudflareTunnelList
+	if err := k8sClient.List(ctx, &tunnels, client.InNamespace(ns.Name)); err == nil {
+		for i := range tunnels.Items {
+			_ = k8sClient.Delete(ctx, &tunnels.Items[i])
+		}
+		// Wait for tunnels to be fully deleted (finalizers complete).
+		Eventually(func() bool {
+			var check cfgatev1alpha1.CloudflareTunnelList
+			if err := k8sClient.List(ctx, &check, client.InNamespace(ns.Name)); err != nil {
+				return true
+			}
+			return len(check.Items) == 0
+		}, 60*time.Second, 1*time.Second).Should(BeTrue(),
+			"CloudflareTunnels in namespace %s did not terminate", ns.Name)
+	}
+
+	// Delete namespace after CRs are gone.
 	Expect(k8sClient.Delete(ctx, ns)).To(Succeed())
 
-	// Wait for namespace to terminate (longer timeout for CF API calls).
+	// Wait for namespace to terminate.
 	Eventually(func() bool {
 		var check corev1.Namespace
 		err := k8sClient.Get(ctx, client.ObjectKey{Name: ns.Name}, &check)
@@ -622,5 +802,23 @@ func skipIfNoZone() {
 	skipIfNoCredentials()
 	if testEnv.CloudflareZoneName == "" {
 		Skip("CLOUDFLARE_ZONE_NAME not set - skipping DNS E2E test")
+	}
+}
+
+// skipIfNoIdP skips the test if Identity Provider is not configured.
+// Required for P1 tests: email, emailDomain, oidcClaim rules.
+func skipIfNoIdP() {
+	skipIfNoZone()
+	if testEnv.CloudflareIdPID == "" {
+		Skip("CLOUDFLARE_IDP_ID not set - required for IdP-dependent Access tests")
+	}
+}
+
+// skipIfNoGSuiteGroup skips the test if GSuite group testing is not configured.
+// Required for P2 tests: gsuiteGroup rules.
+func skipIfNoGSuiteGroup() {
+	skipIfNoIdP()
+	if testEnv.CloudflareTestGroup == "" {
+		Skip("CLOUDFLARE_TEST_GROUP not set - required for GSuite group tests")
 	}
 }

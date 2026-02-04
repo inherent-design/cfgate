@@ -25,14 +25,14 @@ Before applying, edit these files:
 | File | What to change |
 |------|----------------|
 | `tunnel.yaml` | Set `accountId` to your Cloudflare account ID |
-| `dnssync.yaml` | Set `zones[].name` to your domain |
+| `dns.yaml` | Set `zones[].name` to your domain |
 | `httproute.yaml` | Set `hostnames[]` to your subdomain |
 
 ## Verify
 
 ```bash
 kubectl get cloudflaretunnel -n cfgate-system
-kubectl get cloudflarednssyncs -n cfgate-system
+kubectl get cloudflarednses -n cfgate-system
 kubectl get httproute -n demo
 curl https://echo.yourdomain.com
 ```

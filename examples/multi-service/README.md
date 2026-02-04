@@ -15,7 +15,7 @@ web.example.com   ──┘
 
 # 2. Edit configuration files
 # - tunnel.yaml: set accountId
-# - dnssync.yaml: set zones[].name
+# - dns.yaml: set zones[].name
 # - httproutes.yaml: set hostnames
 
 # 3. Deploy
@@ -26,7 +26,7 @@ kubectl apply -k examples/multi-service
 
 - One `CloudflareTunnel` with 2 replicas
 - One `Gateway` shared by all routes
-- One `CloudflareDNSSync` watching all HTTPRoutes
+- One `CloudflareDNS` watching all HTTPRoutes
 - Two services: `api` and `web`
 - Two HTTPRoutes with different hostnames
 
