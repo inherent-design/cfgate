@@ -1,10 +1,7 @@
 # cfgate mise configuration
-# Replaces Makefile - all build/test/deploy orchestration
 
 [env]
 _.file = ["secrets.enc.yaml", ".env"]
-
-# Image configuration
 IMG = "cfgate:local"
 REGISTRY = "ghcr.io/inherent-design/cfgate"
 
@@ -16,14 +13,12 @@ go = "1.25"
 "aqua:golangci/golangci-lint" = "2.8.0"
 "github:kubernetes-sigs/controller-tools[exe=controller-gen]" = "0.20.0"
 "go:github.com/onsi/ginkgo/v2/ginkgo" = "2.28.1"
-"go:go.abhg.dev/doc2go" = "0.12.0"
 
 #
 # Development
 #
 
 [tasks.codegen]
-alias = "gen"
 description = "Generate DeepCopy and CRD manifests"
 run = """
 controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
@@ -38,12 +33,34 @@ run = "golangci-lint run"
 description = "Run golangci-lint with auto-fix"
 run = "golangci-lint run --fix"
 
-[tasks.fmt]
+[tasks.format]
+alias = ["fmt"]
 description = "Format and vet code"
 run = "go fmt ./... && go vet ./..."
 
 #
-# E2E Testing (LIVE Cloudflare API only)
+# Build
+#
+
+[tasks.manifests]
+description = "Generate release manifests to dist/"
+depends = ["codegen"]
+run = """
+mkdir -p dist
+cp config/crd/bases/*.yaml dist/
+kustomize build config/default > dist/install.yaml
+echo "Release manifests written to dist/"
+ls -la dist/
+"""
+
+[tasks.build]
+alias = "b"
+description = "Build manager binary"
+depends = ["codegen"]
+run = "CGO_ENABLED=0 go build -o bin/manager ./cmd/manager"
+
+#
+# Testing
 #
 
 [tasks.e2e]
@@ -61,56 +78,9 @@ ginkgo -vv -p --keep-going --silence-skips --poll-progress-after=15s \
 """
 
 [tasks."e2e:cleanup"]
-alias = ["cleanup"]
+alias = ["clean"]
 description = "Clean up orphaned E2E test resources from Cloudflare"
 run = "go run ./cmd/cleanup"
-
-#
-# Build
-#
-
-[tasks.build]
-alias = "b"
-description = "Build manager binary"
-depends = ["codegen"]
-run = "CGO_ENABLED=0 go build -o bin/manager ./cmd/manager"
-
-[tasks."docker:build"]
-alias = "db"
-description = "Build Docker image"
-run = "docker build -t ${IMG} ."
-
-[tasks."docker:push"]
-alias = "dp"
-description = "Push Docker image to registry"
-run = """
-docker tag ${IMG} ${REGISTRY}:latest
-docker push ${REGISTRY}:latest
-"""
-
-[tasks."docker:buildx"]
-description = "Build multi-arch image (amd64 + arm64)"
-run = """
-docker buildx build \
-  --platform linux/amd64,linux/arm64 \
-  -t ${REGISTRY}:latest \
-  --push .
-"""
-
-#
-# Release
-#
-
-[tasks."release:manifests"]
-description = "Generate release manifests to dist/"
-depends = ["codegen"]
-run = """
-mkdir -p dist
-cp config/crd/bases/*.yaml dist/
-kustomize build config/default > dist/install.yaml
-echo "Release manifests written to dist/"
-ls -la dist/
-"""
 
 #
 # Cluster - Local Development
@@ -135,18 +105,12 @@ run = "kind get clusters | grep cfgate-test && kubectl --context kind-cfgate-tes
 # Deploy - Local Development
 #
 
-[tasks.install]
-alias = "i"
+[tasks."local:install"]
 description = "Install CRDs into current cluster"
 depends = ["codegen"]
 run = "kustomize build config/crd | kubectl apply -f -"
 
-[tasks.uninstall]
-description = "Uninstall CRDs from current cluster"
-run = "kustomize build config/crd | kubectl delete --ignore-not-found -f -"
-
-[tasks.deploy]
-alias = "d"
+[tasks."local:deploy"]
 description = "Deploy controller to current cluster"
 depends = ["codegen", "docker:build"]
 run = """
@@ -154,12 +118,44 @@ cd config/manager && kustomize edit set image controller=${IMG}
 kustomize build config/default | kubectl apply -f -
 """
 
-[tasks.undeploy]
+[tasks."local:undeploy"]
 description = "Remove controller from current cluster"
 run = "kustomize build config/default | kubectl delete --ignore-not-found -f -"
 
+[tasks."local:uninstall"]
+description = "Uninstall CRDs from current cluster"
+run = "kustomize build config/crd | kubectl delete --ignore-not-found -f -"
+
+#
+# Controller
+#
+
 [tasks.run]
-alias = "r"
 description = "Run controller locally (outside cluster)"
-depends = ["codegen"]
 run = "go run ./cmd/manager"
+
+#
+# Docker
+#
+
+[tasks."docker:build"]
+alias = "db"
+description = "Build Docker image"
+run = "docker build -t ${IMG} ."
+
+[tasks."docker:push"]
+alias = "dp"
+description = "Push Docker image to registry"
+run = """
+docker tag ${IMG} ${REGISTRY}:latest
+docker push ${REGISTRY}:latest
+"""
+
+[tasks."docker:buildx"]
+description = "Build multi-arch image (amd64 + arm64)"
+run = """
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t ${REGISTRY}:latest \
+  --push .
+"""
