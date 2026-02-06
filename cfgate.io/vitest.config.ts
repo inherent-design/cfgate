@@ -5,12 +5,10 @@ export default defineWorkersConfig({
     exclude: ['node_modules', 'docs'],
   },
   test: {
+    include: ['tests\/{**,.}\/*.test.ts'],
     poolOptions: {
       workers: {
         wrangler: { configPath: './wrangler.toml' },
-        // miniflare: {
-        //   kvNamespaces: ["TEST_NAMESPACE"],
-        // },
       },
     },
   },

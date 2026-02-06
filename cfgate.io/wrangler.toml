@@ -1,9 +1,13 @@
 "$schema" = "./node_modules/wrangler/config-schema.json"
 name = "cfgate-worker"
 main = "./src/index.ts"
-compatibility_date = "2026-02-04"
+compatibility_date = "2026-01-31"
 compatibility_flags = ["nodejs_compat"]
 workers_dev = false
+
+[[routes]]
+pattern = "cfgate.io"
+zone_name = "cfgate.io"
 
 [[routes]]
 pattern = "cfgate.io/*"

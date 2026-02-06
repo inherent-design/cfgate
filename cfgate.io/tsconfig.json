@@ -27,6 +27,6 @@
     // Additional features
     "resolveJsonModule": true
   },
-  "include": ["src"],
+  "include": ["src", "tests"],
   "exclude": ["node_modules", "docs"]
 }

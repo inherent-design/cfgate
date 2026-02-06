@@ -1,19 +1,21 @@
 {
   "name": "cfgate-infra",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "https://cfgate.io",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy": "wrangler deploy",
+    "deploy:cf": "wrangler deploy",
     "format": "prettier --write .",
     "lint": "eslint --fix",
     "types": "wrangler types src/worker-configuration.d.ts",
     "typecheck": "pnpm types && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "tail": "wrangler tail",
     "tail:prod": "wrangler tail --env production",
-    "prepare": "pnpm types && pnpm format && pnpm lint"
+    "prepare": "pnpm types "
   },
   "author": "inherent.design",
   "license": "Apache-2.0",
@@ -32,6 +34,9 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",
     "vitest": "^3.2.4",
-    "wrangler": "^4.62.0"
+    "wrangler": "^4.63.0"
+  },
+  "dependencies": {
+    "hono": "^4.11.7"
   }
 }
