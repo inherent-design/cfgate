@@ -18,7 +18,9 @@ COPY cmd/ cmd/
 COPY api/ api/
 COPY internal/ internal/
 
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     go build -trimpath -ldflags "-s -w \
     -X main.Version=${VERSION} \
     -X main.Commit=${COMMIT} \
