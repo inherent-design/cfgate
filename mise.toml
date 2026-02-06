@@ -4,6 +4,8 @@
 _.file = ["secrets.enc.yaml", ".env"]
 IMG = "cfgate:local"
 REGISTRY = "ghcr.io/inherent-design/cfgate"
+CLUSTER_NAME = "cfgate-dev"
+GATEWAY_API_VERSION = "v1.4.1"
 
 [tools]
 go = "1.25"
@@ -108,33 +110,42 @@ run = "go run ./cmd/cleanup"
 #
 
 [tasks."cluster:create"]
-description = "Create dedicated cfgate test cluster"
+description = "Create dedicated cfgate dev cluster"
 run = """
-kind create cluster --name cfgate-test --wait 5m
-kubectl cluster-info --context kind-cfgate-test
+if kind get clusters 2>/dev/null | grep -qx "${CLUSTER_NAME}"; then
+  echo "Cluster '${CLUSTER_NAME}' already exists"
+else
+  kind create cluster --name "${CLUSTER_NAME}" --wait 5m
+fi
+kubectl config use-context "kind-${CLUSTER_NAME}"
+kubectl cluster-info
 """
 
 [tasks."cluster:delete"]
-description = "Delete cfgate test cluster"
-run = "kind delete cluster --name cfgate-test"
+description = "Delete cfgate dev cluster"
+run = "kind delete cluster --name ${CLUSTER_NAME}"
 
 [tasks."cluster:status"]
-description = "Check cfgate test cluster status"
-run = "kind get clusters | grep cfgate-test && kubectl --context kind-cfgate-test get nodes || echo 'cfgate-test cluster not found'"
+description = "Check cfgate dev cluster status"
+run = "kind get clusters | grep -qx ${CLUSTER_NAME} && kubectl --context kind-${CLUSTER_NAME} get nodes || echo '${CLUSTER_NAME} cluster not found'"
 
 #
 # Deploy - Local Development
 #
 
 [tasks."local:install"]
-description = "Install CRDs into current cluster"
+description = "Install Gateway API and cfgate CRDs"
 depends = ["codegen"]
-run = "kubectl apply -k config/crd"
+run = """
+kubectl apply -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/standard-install.yaml"
+kubectl apply -k config/crd
+"""
 
 [tasks."local:deploy"]
 description = "Deploy controller to current cluster"
 depends = ["codegen", "docker:build"]
 run = """
+kind load docker-image ${IMG} --name ${CLUSTER_NAME}
 cd config/manager && kustomize edit set image controller=${IMG}
 kubectl apply -k config/default
 """
@@ -145,7 +156,22 @@ run = "kubectl delete -k config/default --ignore-not-found"
 
 [tasks."local:uninstall"]
 description = "Uninstall CRDs from current cluster"
-run = "kubectl delete -k config/crd --ignore-not-found"
+run = """
+kubectl delete -k config/crd --ignore-not-found
+kubectl delete -f "https://github.com/kubernetes-sigs/gateway-api/releases/download/${GATEWAY_API_VERSION}/standard-install.yaml" --ignore-not-found 2>/dev/null || true
+"""
+
+[tasks."local:helm"]
+description = "Deploy controller via local Helm chart"
+depends = ["codegen", "docker:build"]
+run = """
+kind load docker-image ${IMG} --name ${CLUSTER_NAME}
+helm upgrade --install cfgate charts/cfgate \
+  --namespace cfgate-system --create-namespace \
+  --set image.repository=${IMG%%:*} \
+  --set image.tag=${IMG##*:} \
+  --set image.pullPolicy=Never
+"""
 
 #
 # Controller
