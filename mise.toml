@@ -148,6 +148,7 @@ run = """
 kind load docker-image ${IMG} --name ${CLUSTER_NAME}
 cd config/manager && kustomize edit set image controller=${IMG} && cd ../..
 kubectl apply -k config/default
+git checkout config/manager/kustomization.yaml 2>/dev/null || true
 """
 
 [tasks."local:undeploy"]
