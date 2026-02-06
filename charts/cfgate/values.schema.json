@@ -6,7 +6,7 @@
     "replicaCount": {
       "type": "integer",
       "minimum": 1,
-      "default": 1,
+      "default": 2,
       "description": "Number of controller replicas"
     },
     "image": {
@@ -92,16 +92,6 @@
           },
           "default": {},
           "description": "Service account annotations"
-        }
-      }
-    },
-    "leaderElection": {
-      "type": "object",
-      "properties": {
-        "enabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Enable leader election"
         }
       }
     },

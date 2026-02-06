@@ -36,9 +36,7 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            {{- if include "cfgate.leaderElectionEnabled" . }}
             - --leader-elect
-            {{- end }}
             - --health-probe-bind-address=:{{ .Values.health.port }}
             - --metrics-bind-address=:{{ .Values.metrics.port }}
           ports:

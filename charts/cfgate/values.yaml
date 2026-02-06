@@ -2,8 +2,7 @@
 # Gateway API-native Kubernetes operator for Cloudflare Tunnel, DNS, and Access
 
 # Number of controller replicas
-# Leader election is automatically enabled when replicaCount > 1
-replicaCount: 1
+replicaCount: 2
 
 image:
   repository: ghcr.io/inherent-design/cfgate
@@ -32,11 +31,6 @@ serviceAccount:
   name: ""
   # Annotations to add to the service account
   annotations: {}
-
-# Leader election settings
-# Automatically enabled when replicaCount > 1
-leaderElection:
-  enabled: true
 
 # Metrics configuration
 metrics:

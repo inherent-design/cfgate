@@ -74,12 +74,3 @@ Create the name of the service account to use
 {{- end }}
 {{- end }}
 
-{{/*
-Determine if leader election should be enabled.
-Enabled when replicaCount > 1 or explicitly enabled.
-*/}}
-{{- define "cfgate.leaderElectionEnabled" -}}
-{{- if or (gt (int .Values.replicaCount) 1) .Values.leaderElection.enabled }}
-{{- true }}
-{{- end }}
-{{- end }}

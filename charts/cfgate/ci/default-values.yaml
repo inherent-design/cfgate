@@ -1,7 +1,7 @@
 # Minimal values for chart-testing
 # These values are used by ct lint to validate the chart
 
-replicaCount: 1
+replicaCount: 2
 
 image:
   repository: ghcr.io/inherent-design/cfgate
@@ -17,9 +17,6 @@ serviceAccount:
   create: true
   name: ""
   annotations: {}
-
-leaderElection:
-  enabled: false
 
 metrics:
   port: 8080
