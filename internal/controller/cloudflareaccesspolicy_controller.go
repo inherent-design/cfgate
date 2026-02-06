@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -1080,6 +1081,10 @@ func (r *CloudflareAccessPolicyReconciler) updateStatus(ctx context.Context, pol
 		return fmt.Errorf("failed to re-fetch policy: %w", err)
 	}
 
+	if accessPolicyStatusEqual(&current.Status, &policy.Status) {
+		return nil
+	}
+
 	// Copy status
 	current.Status = policy.Status
 
@@ -1088,6 +1093,68 @@ func (r *CloudflareAccessPolicyReconciler) updateStatus(ctx context.Context, pol
 	}
 
 	return nil
+}
+
+// accessPolicyStatusEqual compares two CloudflareAccessPolicyStatus values for equality,
+// ignoring condition LastTransitionTime to avoid spurious status updates.
+func accessPolicyStatusEqual(a, b *cfgatev1alpha1.CloudflareAccessPolicyStatus) bool {
+	if a.ObservedGeneration != b.ObservedGeneration {
+		return false
+	}
+
+	if a.ApplicationID != b.ApplicationID {
+		return false
+	}
+	if a.ApplicationAUD != b.ApplicationAUD {
+		return false
+	}
+	if a.MTLSRuleID != b.MTLSRuleID {
+		return false
+	}
+	if a.AttachedTargets != b.AttachedTargets {
+		return false
+	}
+
+	if !reflect.DeepEqual(a.ServiceTokenIDs, b.ServiceTokenIDs) {
+		return false
+	}
+
+	// Compare conditions (ignoring LastTransitionTime)
+	if len(a.Conditions) != len(b.Conditions) {
+		return false
+	}
+	for i := range a.Conditions {
+		if a.Conditions[i].Type != b.Conditions[i].Type ||
+			a.Conditions[i].Status != b.Conditions[i].Status ||
+			a.Conditions[i].Reason != b.Conditions[i].Reason ||
+			a.Conditions[i].Message != b.Conditions[i].Message {
+			return false
+		}
+	}
+
+	// Compare ancestors
+	if len(a.Ancestors) != len(b.Ancestors) {
+		return false
+	}
+	for i := range a.Ancestors {
+		if !reflect.DeepEqual(a.Ancestors[i].AncestorRef, b.Ancestors[i].AncestorRef) ||
+			a.Ancestors[i].ControllerName != b.Ancestors[i].ControllerName {
+			return false
+		}
+		if len(a.Ancestors[i].Conditions) != len(b.Ancestors[i].Conditions) {
+			return false
+		}
+		for j := range a.Ancestors[i].Conditions {
+			if a.Ancestors[i].Conditions[j].Type != b.Ancestors[i].Conditions[j].Type ||
+				a.Ancestors[i].Conditions[j].Status != b.Ancestors[i].Conditions[j].Status ||
+				a.Ancestors[i].Conditions[j].Reason != b.Ancestors[i].Conditions[j].Reason ||
+				a.Ancestors[i].Conditions[j].Message != b.Ancestors[i].Conditions[j].Message {
+				return false
+			}
+		}
+	}
+
+	return true
 }
 
 // updateAncestorStatuses updates the PolicyAncestorStatus for each resolved target.
@@ -1199,7 +1266,9 @@ func (r *CloudflareAccessPolicyReconciler) SetupWithManager(mgr ctrl.Manager) er
 	log := mgr.GetLogger().WithName("controller").WithName("accesspolicy")
 	log.Info("registering controller with manager")
 	controllerBuilder := ctrl.NewControllerManagedBy(mgr).
-		For(&cfgatev1alpha1.CloudflareAccessPolicy{}).
+		For(&cfgatev1alpha1.CloudflareAccessPolicy{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		Owns(&corev1.Secret{}). // Service token secrets
 		Watches(
 			&gateway.HTTPRoute{},

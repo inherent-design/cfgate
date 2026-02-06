@@ -48,7 +48,7 @@ rules:
   - cfgate.io
   resources:
   - cloudflareaccesspolicies
-  - cloudflaredns
+  - cloudflarednses
   - cloudflaretunnels
   verbs:
   - create
@@ -62,7 +62,7 @@ rules:
   - cfgate.io
   resources:
   - cloudflareaccesspolicies/finalizers
-  - cloudflaredns/finalizers
+  - cloudflarednses/finalizers
   - cloudflaretunnels/finalizers
   verbs:
   - update
@@ -70,7 +70,7 @@ rules:
   - cfgate.io
   resources:
   - cloudflareaccesspolicies/status
-  - cloudflaredns/status
+  - cloudflarednses/status
   - cloudflaretunnels/status
   verbs:
   - get

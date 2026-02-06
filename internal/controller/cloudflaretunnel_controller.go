@@ -219,7 +219,9 @@ func (r *CloudflareTunnelReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	r.APIReader = mgr.GetAPIReader()
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&cfgatev1alpha1.CloudflareTunnel{}).
+		For(&cfgatev1alpha1.CloudflareTunnel{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Secret{}).
 		// Watch Gateway resources that reference our tunnels
@@ -710,7 +712,10 @@ func (r *CloudflareTunnelReconciler) updateStatus(ctx context.Context, tunnel *c
 		return fmt.Errorf("failed to re-fetch tunnel: %w", err)
 	}
 
-	// Copy status
+	if tunnelStatusEqual(&current.Status, &tunnel.Status) {
+		return nil
+	}
+
 	current.Status = tunnel.Status
 
 	if err := r.Status().Update(ctx, &current); err != nil {
@@ -718,6 +723,45 @@ func (r *CloudflareTunnelReconciler) updateStatus(ctx context.Context, tunnel *c
 	}
 
 	return nil
+}
+
+// tunnelStatusEqual compares two CloudflareTunnel statuses for equality, ignoring
+// LastSyncTime which changes on every reconciliation to avoid spurious updates.
+func tunnelStatusEqual(a, b *cfgatev1alpha1.CloudflareTunnelStatus) bool {
+	// Compare generation
+	if a.ObservedGeneration != b.ObservedGeneration {
+		return false
+	}
+
+	// Compare string fields
+	if a.TunnelID != b.TunnelID ||
+		a.TunnelName != b.TunnelName ||
+		a.TunnelDomain != b.TunnelDomain ||
+		a.AccountID != b.AccountID {
+		return false
+	}
+
+	// Compare int32 fields
+	if a.Replicas != b.Replicas ||
+		a.ReadyReplicas != b.ReadyReplicas ||
+		a.ConnectedRouteCount != b.ConnectedRouteCount {
+		return false
+	}
+
+	// Compare conditions (ignoring LastTransitionTime)
+	if len(a.Conditions) != len(b.Conditions) {
+		return false
+	}
+	for i := range a.Conditions {
+		if a.Conditions[i].Type != b.Conditions[i].Type ||
+			a.Conditions[i].Status != b.Conditions[i].Status ||
+			a.Conditions[i].Reason != b.Conditions[i].Reason ||
+			a.Conditions[i].Message != b.Conditions[i].Message {
+			return false
+		}
+	}
+
+	return true
 }
 
 // getCloudflareClient returns a Cloudflare client for the tunnel, creating one

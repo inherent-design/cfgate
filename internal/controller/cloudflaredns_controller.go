@@ -71,9 +71,9 @@ type CloudflareDNSReconciler struct {
 	CredentialCache *cloudflare.CredentialCache
 }
 
-// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaredns,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaredns/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaredns/finalizers,verbs=update
+// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflarednses,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflarednses/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=cfgate.io,resources=cloudflarednses/finalizers,verbs=update
 // +kubebuilder:rbac:groups=cfgate.io,resources=cloudflaretunnels,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
