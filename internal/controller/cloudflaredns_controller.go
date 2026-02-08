@@ -1080,8 +1080,12 @@ func (r *CloudflareDNSReconciler) cleanupRecordsWithFallback(ctx context.Context
 		zoneID := zoneConfig.ID
 		if zoneID == "" {
 			zone, err := dnsService.ResolveZone(ctx, zoneConfig.Name)
-			if err != nil || zone == nil {
+			if err != nil {
 				logger.Error(err, "failed to resolve zone for cleanup", "zone", zoneConfig.Name)
+				continue
+			}
+			if zone == nil {
+				logger.Info("zone not found for cleanup, skipping", "zone", zoneConfig.Name)
 				continue
 			}
 			zoneID = zone.ID

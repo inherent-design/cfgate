@@ -666,7 +666,7 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 
 			By("Verifying controller created a NEW tunnel (different ID from deleted one)")
 			Expect(tunnel.Status.TunnelID).NotTo(Equal(deletedTunnelID),
-				"Controller should NOT adopt the deleted tunnel — should create a new one")
+				"Controller should NOT adopt the deleted tunnel, should create a new one")
 			Expect(tunnel.Status.TunnelID).NotTo(BeEmpty())
 
 			By("Verifying new tunnel exists in CF API with non-deleted status")

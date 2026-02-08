@@ -57,7 +57,7 @@ var CfgateAnnotationOrGenerationPredicate = predicate.Or(
 // finalizers. Without this, setting DeletionTimestamp (which does NOT increment
 // generation) produces an Update event that GenerationChangedPredicate filters.
 // The reconciler never sees the deletion until a stale RequeueAfter timer fires
-// — potentially minutes later — causing delayed or failed cleanup.
+// potentially minutes later, causing delayed or failed cleanup.
 var GenerationOrDeletionPredicate = predicate.Or(
 	predicate.GenerationChangedPredicate{},
 	predicate.Funcs{

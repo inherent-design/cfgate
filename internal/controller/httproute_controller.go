@@ -99,7 +99,7 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 	}
 
-	// 4. Validate each parentRef — only process cfgate-managed parents.
+	// 4. Validate each parentRef; only process cfgate-managed parents.
 	// Per spec: "Implementations of this API can only populate Route status
 	// for the Gateways/parent resources they are responsible for."
 	var cfgateParentStatuses []gwapiv1.RouteParentStatus
@@ -308,7 +308,7 @@ func (r *HTTPRouteReconciler) isCfgateParentRef(
 		Namespace: gwNamespace,
 	}, &gateway); err != nil {
 		if apierrors.IsNotFound(err) {
-			// Gateway not found — cannot determine ownership, skip gracefully
+			// Gateway not found, cannot determine ownership, skip gracefully
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to get Gateway %s/%s: %w", gwNamespace, ref.Name, err)
@@ -318,7 +318,7 @@ func (r *HTTPRouteReconciler) isCfgateParentRef(
 	var gc gwapiv1.GatewayClass
 	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, &gc); err != nil {
 		if apierrors.IsNotFound(err) {
-			// GatewayClass not found — cannot determine ownership, skip gracefully
+			// GatewayClass not found, cannot determine ownership, skip gracefully
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to get GatewayClass %s: %w", gateway.Spec.GatewayClassName, err)

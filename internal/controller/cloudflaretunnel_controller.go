@@ -757,7 +757,7 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 			}
 
 			if accountID == "" {
-				log.Error(nil, "no account ID available for deletion, tunnel may be orphaned")
+				log.Info("no account ID available for deletion, tunnel may be orphaned")
 				r.Recorder.Eventf(tunnel, nil, corev1.EventTypeWarning, "TunnelOrphanedNoAccountID", "Delete",
 					"Tunnel %s may be orphaned on Cloudflare: no account ID", tunnel.Status.TunnelID)
 			} else if err := tunnelService.Delete(ctx, accountID, tunnel.Status.TunnelID); err != nil {
@@ -767,13 +767,13 @@ func (r *CloudflareTunnelReconciler) reconcileDelete(ctx context.Context, tunnel
 						"retryElapsed", retryElapsed.Round(time.Second),
 						"retryBudget", deletionRetryBudget)
 					r.Recorder.Eventf(tunnel, nil, corev1.EventTypeWarning, "TunnelDeleteError", "Delete", "%s", err.Error())
-					// Requeue to retry — cloudflared pods may still have active connections.
+					// Requeue to retry; cloudflared pods may still have active connections.
 					// Once connections drain, the delete will succeed.
 					return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 				}
-				// Retry budget exhausted — fall through to finalizer removal.
+				// Retry budget exhausted, fall through to finalizer removal.
 				// Tunnel may be orphaned on Cloudflare; emit warning for observability.
-				log.Error(err, "retry budget exhausted, proceeding with finalizer removal — tunnel may be orphaned",
+				log.Error(err, "retry budget exhausted, proceeding with finalizer removal, tunnel may be orphaned",
 					"retryElapsed", retryElapsed.Round(time.Second),
 					"tunnelID", tunnel.Status.TunnelID)
 				r.Recorder.Eventf(tunnel, nil, corev1.EventTypeWarning, "TunnelOrphanedDeleteFailed", "Delete",

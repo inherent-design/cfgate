@@ -1737,7 +1737,7 @@ func accessRulesFromAPI(rules []zero_trust.AccessRule) []AccessRuleParam {
 
 // accessRuleFromAPI converts a single SDK AccessRule response to internal AccessRuleParam.
 // Returns nil if the rule type is not recognized. SDK AccessRule fields are interface{}
-// union types — only one field is non-nil per rule.
+// union types where only one field is non-nil per rule.
 func accessRuleFromAPI(rule *zero_trust.AccessRule) *AccessRuleParam {
 	if rule == nil {
 		return nil

@@ -421,7 +421,7 @@ var _ = Describe("Multi-Resource E2E", Label("cloudflare"), Ordered, func() {
 			By("Concurrently updating tunnel spec and route")
 			var wg sync.WaitGroup
 
-			// Update tunnel spec (retry on conflict — controller may update status concurrently)
+			// Update tunnel spec (retry on conflict, controller may update status concurrently)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -440,7 +440,7 @@ var _ = Describe("Multi-Resource E2E", Label("cloudflare"), Ordered, func() {
 				}, 30*time.Second, 1*time.Second).Should(Succeed())
 			}()
 
-			// Update route (retry on conflict — controller may update status concurrently)
+			// Update route (retry on conflict, controller may update status concurrently)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
@@ -551,7 +551,7 @@ var _ = Describe("Multi-Resource E2E", Label("cloudflare"), Ordered, func() {
 					return false
 				}
 				// Tunnel should be nil (404/not found) or have deleted_at set.
-				// Note: CF API status enum is {inactive,degraded,healthy,down} — there is no
+				// Note: CF API status enum is {inactive,degraded,healthy,down}; there is no
 				// "deleted" status. Deletion is indicated by a non-zero deleted_at timestamp.
 				return t == nil || !t.DeletedAt.IsZero()
 			}, DefaultTimeout, DefaultInterval).Should(BeTrue(),

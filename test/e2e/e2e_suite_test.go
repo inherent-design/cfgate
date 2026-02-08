@@ -268,7 +268,7 @@ var _ = SynchronizedBeforeSuite(
 		return []byte(kubeconfigPath)
 	},
 	// All processes: create K8s clients from kubeconfig path.
-	// NO manager creation — only Process 1 runs the controller.
+	// NO manager creation; only Process 1 runs the controller.
 	func(data []byte) {
 		kubeconfigPath := string(data)
 
@@ -297,7 +297,7 @@ var _ = SynchronizedAfterSuite(
 	// All processes: intentionally empty.
 	// Each test cleans its own namespace via DeferCleanup/AfterAll.
 	// We do NOT clean namespaces here because other parallel processes may still
-	// have specs running — deleting their namespaces causes "forbidden: unable to
+	// have specs running; deleting their namespaces causes "forbidden: unable to
 	// create new content in namespace" or "namespace not found" failures.
 	func() {},
 	// Process 1 only: runs AFTER all processes complete.
@@ -758,7 +758,7 @@ func deleteTestNamespace(ns *corev1.Namespace) {
 		return
 	}
 
-	// Delete all cfgate CRs first — finalizers need the Secret which lives in namespace.
+	// Delete all cfgate CRs first; finalizers need the Secret which lives in namespace.
 	// Pre-deleting CRs triggers the controller to process deletions while the
 	// namespace (and its Secrets) still exist, avoiding orphaned finalizers.
 
