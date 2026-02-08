@@ -1,4 +1,11 @@
+<section style="text-align: center">
+
 # cfgate
+
+[![Latest Release](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat)](https://github.com/inherent-design/cfgate/releases/latest) [![Image](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat&label=image&logo=docker&logoColor=white&color=2496ED)](https://github.com/orgs/inherent-design/packages/container/package/cfgate) [![Helm Chart](https://img.shields.io/badge/chart-GHCR-0F1689?style=flat&logo=helm&logoColor=white)](https://github.com/orgs/inherent-design/packages/container/package/charts%2Fcfgate)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/inherent-design/cfgate/ci.yml?style=flat)](https://github.com/inherent-design/cfgate/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/inherent-design/cfgate)](https://goreportcard.com/report/github.com/inherent-design/cfgate) [![Go Reference](https://pkg.go.dev/badge/github.com/inherent-design/cfgate.svg)](https://pkg.go.dev/cfgate.io/cfgate/)
+
+</section>
 
 Gateway API-native Kubernetes operator for Cloudflare Tunnel, DNS, and Access management.
 
@@ -136,56 +143,56 @@ cfgate automatically:
 
 Manages tunnel lifecycle and cloudflared deployment. Zone-agnostic: a single tunnel can serve any number of domains.
 
-| Field | Description |
-|-------|-------------|
-| `spec.tunnel.name` | Tunnel name (idempotent: creates or adopts) |
-| `spec.cloudflare.accountId` | Cloudflare account ID |
-| `spec.cloudflare.secretRef` | Secret containing API token |
-| `spec.cloudflared.replicas` | Number of cloudflared pods (1-10) |
-| `spec.cloudflared.protocol` | Transport protocol: `auto`, `quic`, `http2` |
-| `spec.originDefaults` | Default origin connection settings |
-| `spec.fallbackTarget` | Catch-all service (default: `http_status:404`) |
+| Field                       | Description                                    |
+| --------------------------- | ---------------------------------------------- |
+| `spec.tunnel.name`          | Tunnel name (idempotent: creates or adopts)    |
+| `spec.cloudflare.accountId` | Cloudflare account ID                          |
+| `spec.cloudflare.secretRef` | Secret containing API token                    |
+| `spec.cloudflared.replicas` | Number of cloudflared pods (1-10)              |
+| `spec.cloudflared.protocol` | Transport protocol: `auto`, `quic`, `http2`    |
+| `spec.originDefaults`       | Default origin connection settings             |
+| `spec.fallbackTarget`       | Catch-all service (default: `http_status:404`) |
 
 ### CloudflareDNS
 
 Syncs DNS records independently from tunnel lifecycle. Supports multiple zones per resource.
 
-| Field | Description |
-|-------|-------------|
-| `spec.tunnelRef` | Reference to CloudflareTunnel (CNAME target) |
-| `spec.externalTarget` | Alternative: non-tunnel DNS target |
-| `spec.zones[]` | Zones to manage (by name or explicit ID) |
-| `spec.source.gatewayRoutes` | Auto-discover hostnames from HTTPRoutes |
-| `spec.source.explicit[]` | Explicit hostname list |
-| `spec.policy` | Lifecycle policy: `sync`, `upsert-only`, `create-only` |
-| `spec.ownership` | TXT record ownership tracking (external-dns compatible) |
-| `spec.defaults` | Default TTL and proxied settings |
+| Field                       | Description                                             |
+| --------------------------- | ------------------------------------------------------- |
+| `spec.tunnelRef`            | Reference to CloudflareTunnel (CNAME target)            |
+| `spec.externalTarget`       | Alternative: non-tunnel DNS target                      |
+| `spec.zones[]`              | Zones to manage (by name or explicit ID)                |
+| `spec.source.gatewayRoutes` | Auto-discover hostnames from HTTPRoutes                 |
+| `spec.source.explicit[]`    | Explicit hostname list                                  |
+| `spec.policy`               | Lifecycle policy: `sync`, `upsert-only`, `create-only`  |
+| `spec.ownership`            | TXT record ownership tracking (external-dns compatible) |
+| `spec.defaults`             | Default TTL and proxied settings                        |
 
 ### CloudflareAccessPolicy
 
 Manages Cloudflare Access applications and policies for zero-trust authentication.
 
-| Field | Description |
-|-------|-------------|
-| `spec.targetRef` | Gateway API resource to protect |
-| `spec.hostnames[]` | Explicit hostnames for Access application |
-| `spec.tunnelRef` | Tunnel reference for credential inheritance |
-| `spec.authentication` | Identity provider configuration |
-| `spec.rules[]` | Access rules (allow, deny, bypass) |
+| Field                 | Description                                 |
+| --------------------- | ------------------------------------------- |
+| `spec.targetRef`      | Gateway API resource to protect             |
+| `spec.hostnames[]`    | Explicit hostnames for Access application   |
+| `spec.tunnelRef`      | Tunnel reference for credential inheritance |
+| `spec.authentication` | Identity provider configuration             |
+| `spec.rules[]`        | Access rules (allow, deny, bypass)          |
 
 #### Access Application Settings
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `spec.application.allowedIdps` | `[]string` | Restrict identity providers by UUID. Without this, all configured IdPs (including OTP) are shown. |
-| `spec.application.autoRedirectToIdentity` | `bool` | Skip IdP selection page when a single IdP is in `allowedIdps`. |
-| `spec.application.appLauncherVisible` | `*bool` | Show application in Cloudflare App Launcher. Defaults to `true`. |
-| `spec.application.corsHeaders` | object | CORS configuration (see below). Mutually exclusive with `optionsPreflightBypass`. |
-| `spec.application.optionsPreflightBypass` | `bool` | Allow OPTIONS preflight requests to bypass Access auth. Mutually exclusive with `corsHeaders`. |
-| `spec.application.pathCookieAttribute` | `bool` | Scope Access JWT cookie to the application path instead of hostname. |
-| `spec.application.serviceAuth401Redirect` | `bool` | Return HTTP 401 instead of redirect for service auth blocks. |
-| `spec.application.customNonIdentityDenyUrl` | `string` | Redirect URL for non-identity (service token) denials. |
-| `spec.application.readServiceTokensFromHeader` | `string` | Read service token from a single header (JSON with `cf-access-client-id` and `cf-access-client-secret`). |
+| Field                                          | Type       | Description                                                                                              |
+| ---------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------- |
+| `spec.application.allowedIdps`                 | `[]string` | Restrict identity providers by UUID. Without this, all configured IdPs (including OTP) are shown.        |
+| `spec.application.autoRedirectToIdentity`      | `bool`     | Skip IdP selection page when a single IdP is in `allowedIdps`.                                           |
+| `spec.application.appLauncherVisible`          | `*bool`    | Show application in Cloudflare App Launcher. Defaults to `true`.                                         |
+| `spec.application.corsHeaders`                 | object     | CORS configuration (see below). Mutually exclusive with `optionsPreflightBypass`.                        |
+| `spec.application.optionsPreflightBypass`      | `bool`     | Allow OPTIONS preflight requests to bypass Access auth. Mutually exclusive with `corsHeaders`.           |
+| `spec.application.pathCookieAttribute`         | `bool`     | Scope Access JWT cookie to the application path instead of hostname.                                     |
+| `spec.application.serviceAuth401Redirect`      | `bool`     | Return HTTP 401 instead of redirect for service auth blocks.                                             |
+| `spec.application.customNonIdentityDenyUrl`    | `string`   | Redirect URL for non-identity (service token) denials.                                                   |
+| `spec.application.readServiceTokensFromHeader` | `string`   | Read service token from a single header (JSON with `cf-access-client-id` and `cf-access-client-secret`). |
 
 #### CORS Headers
 
@@ -207,31 +214,31 @@ spec:
 
 Per-route configuration via annotations on Gateway API routes:
 
-| Annotation | Values | Default | Description |
-|------------|--------|---------|-------------|
-| `cfgate.io/origin-protocol` | `http`, `https` | `http` | Backend protocol |
-| `cfgate.io/origin-ssl-verify` | `true`, `false` | `true` | TLS verification |
-| `cfgate.io/origin-connect-timeout` | duration | `30s` | Connection timeout |
-| `cfgate.io/origin-http-host-header` | hostname | -- | Host header override |
-| `cfgate.io/origin-server-name` | hostname | -- | TLS SNI server name |
-| `cfgate.io/origin-ca-pool` | path | -- | CA certificate pool |
-| `cfgate.io/origin-http2` | `true`, `false` | `false` | HTTP/2 to origin |
-| `cfgate.io/ttl` | `1`-`86400` | `1` (auto) | DNS record TTL |
-| `cfgate.io/cloudflare-proxied` | `true`, `false` | `true` | Cloudflare proxy |
-| `cfgate.io/access-policy` | `name` or `ns/name` | -- | Access policy ref |
-| `cfgate.io/hostname` | RFC 1123 hostname | -- | Override/set hostname |
+| Annotation                          | Values              | Default    | Description           |
+| ----------------------------------- | ------------------- | ---------- | --------------------- |
+| `cfgate.io/origin-protocol`         | `http`, `https`     | `http`     | Backend protocol      |
+| `cfgate.io/origin-ssl-verify`       | `true`, `false`     | `true`     | TLS verification      |
+| `cfgate.io/origin-connect-timeout`  | duration            | `30s`      | Connection timeout    |
+| `cfgate.io/origin-http-host-header` | hostname            | --         | Host header override  |
+| `cfgate.io/origin-server-name`      | hostname            | --         | TLS SNI server name   |
+| `cfgate.io/origin-ca-pool`          | path                | --         | CA certificate pool   |
+| `cfgate.io/origin-http2`            | `true`, `false`     | `false`    | HTTP/2 to origin      |
+| `cfgate.io/ttl`                     | `1`-`86400`         | `1` (auto) | DNS record TTL        |
+| `cfgate.io/cloudflare-proxied`      | `true`, `false`     | `true`     | Cloudflare proxy      |
+| `cfgate.io/access-policy`           | `name` or `ns/name` | --         | Access policy ref     |
+| `cfgate.io/hostname`                | RFC 1123 hostname   | --         | Override/set hostname |
 
 ## Requirements
 
 ### Cloudflare API Token
 
-| Scope | Permission | Used By |
-|-------|------------|---------|
-| Account | Cloudflare Tunnel: Edit | CloudflareTunnel |
-| Account | Access: Apps and Policies: Edit | CloudflareAccessPolicy |
-| Account | Access: Service Tokens: Edit | CloudflareAccessPolicy |
-| Account | Account Settings: Read | CloudflareTunnel (accountName only)* |
-| Zone | DNS: Edit | CloudflareDNS |
+| Scope   | Permission                      | Used By                              |
+| ------- | ------------------------------- | ------------------------------------ |
+| Account | Cloudflare Tunnel: Edit         | CloudflareTunnel                     |
+| Account | Access: Apps and Policies: Edit | CloudflareAccessPolicy               |
+| Account | Access: Service Tokens: Edit    | CloudflareAccessPolicy               |
+| Account | Account Settings: Read          | CloudflareTunnel (accountName only)* |
+| Zone    | DNS: Edit                       | CloudflareDNS                        |
 
 *Only required when using `spec.cloudflare.accountName` instead of `accountId`.
 
@@ -258,11 +265,11 @@ The controller extracts the zone from each hostname using the public suffix list
 
 ## Examples
 
-| Example | Description |
-|---------|-------------|
-| [basic](examples/basic) | Single tunnel + gateway + DNS sync |
+| Example                                 | Description                                    |
+| --------------------------------------- | ---------------------------------------------- |
+| [basic](examples/basic)                 | Single tunnel + gateway + DNS sync             |
 | [multi-service](examples/multi-service) | Multiple services, one tunnel, Access policies |
-| [with-rancher](examples/with-rancher) | Rancher 2.14+ integration |
+| [with-rancher](examples/with-rancher)   | Rancher 2.14+ integration                      |
 
 ## Service Mesh Integration
 
