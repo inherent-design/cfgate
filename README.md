@@ -1,11 +1,8 @@
-<section style="text-align: center">
-
 # cfgate
 
 [![Latest Release](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat)](https://github.com/inherent-design/cfgate/releases/latest) [![Image](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat&label=image&logo=docker&logoColor=white&color=2496ED)](https://github.com/orgs/inherent-design/packages/container/package/cfgate) [![Helm Chart](https://img.shields.io/badge/chart-GHCR-0F1689?style=flat&logo=helm&logoColor=white)](https://github.com/orgs/inherent-design/packages/container/package/charts%2Fcfgate)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/inherent-design/cfgate/ci.yml?style=flat)](https://github.com/inherent-design/cfgate/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/inherent-design/cfgate)](https://goreportcard.com/report/github.com/inherent-design/cfgate) [![Go Reference](https://pkg.go.dev/badge/github.com/inherent-design/cfgate.svg)](https://pkg.go.dev/cfgate.io/cfgate/)
 
-</section>
+[![Build Status](https://img.shields.io/github/actions/workflow/status/inherent-design/cfgate/ci.yml?style=flat)](https://github.com/inherent-design/cfgate/actions/workflows/ci.yml) [![Go Report Card](https://goreportcard.com/badge/github.com/inherent-design/cfgate)](https://goreportcard.com/report/github.com/inherent-design/cfgate) [![Go Reference](https://pkg.go.dev/badge/github.com/inherent-design/cfgate.svg)](https://pkg.go.dev/cfgate.io/cfgate/)
 
 Gateway API-native Kubernetes operator for Cloudflare Tunnel, DNS, and Access management.
 

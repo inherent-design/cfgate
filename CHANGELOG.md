@@ -5,6 +5,12 @@ All notable changes to cfgate are documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- Add shields.io badges to README
+
+## [0.1.0-alpha.6] - 2026-02-08
+
 ### Features
 
 - Alpha.6 comprehensive stabilization (unreleased)
@@ -17,6 +23,14 @@ All notable changes to cfgate are documented in this file.
 ### Testing
 
 - **(e2e)** Alpha.6 coverage expansion and 94/94 stabilization
+
+### Documentation
+
+- Add git-cliff changelog and update project docs
+
+### CI/CD
+
+- Use git-cliff for release notes generation
 
 ### Maintenance
 
