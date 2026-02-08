@@ -69,7 +69,7 @@ cfgate uses [sops](https://github.com/getsops/sops) with [age](https://github.co
 age-keygen -o ~/.config/sops/age/keys.txt
 ```
 
-This outputs your public key (starts with `age1...`). Save it -- you'll need it for `.sops.yaml`.
+This outputs your public key (starts with `age1...`). Save it. You need it for `.sops.yaml`.
 
 2. **Configure sops to use your key:**
 
@@ -217,6 +217,25 @@ cfgate/
   docs/                   # Documentation
   hack/                   # Build utilities
 ```
+
+## Commits
+
+We use conventional-ish prefixes: `feat:`, `fix:`, `chore:`, `ci:`, `docs:`, `test:`, `refactor:`, `perf:`, `infra:`, `build:`
+
+No enforcement tooling. No scopes required. Write a clear subject line under 72 characters. If your change has a body, bullet points are preferred.
+
+Scopes are optional and used when the change targets a specific subsystem:
+
+```
+fix(controller): correct DNS record drift detection
+test(e2e): add multi-zone ownership verification
+```
+
+For contributor PRs, the maintainer squash-merges with a clean conventional subject line. You do not need to rewrite your branch history.
+
+## Changelog
+
+Release notes are generated via [git-cliff](https://git-cliff.org/) from commit history. Configuration is in `cliff.toml` at the project root. You do not need to update CHANGELOG.md manually.
 
 ## Code Style
 

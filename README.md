@@ -6,10 +6,10 @@ cfgate replaces legacy Ingress-based Cloudflare Tunnel operators with a modern, 
 
 ## Features
 
-- **CloudflareTunnel** -- Tunnel lifecycle management, cloudflared deployment, credential handling
-- **CloudflareDNS** -- DNS record sync from Gateway API routes or explicit hostnames, multi-zone support, ownership tracking
-- **CloudflareAccessPolicy** -- Zero-trust Access application and policy configuration
-- **Gateway API** -- Native GatewayClass/Gateway/HTTPRoute support with per-route annotations
+- **CloudflareTunnel**: Tunnel lifecycle management, cloudflared deployment, credential handling
+- **CloudflareDNS**: DNS record sync from Gateway API routes or explicit hostnames, multi-zone support, ownership tracking
+- **CloudflareAccessPolicy**: Zero-trust Access application and policy configuration
+- **Gateway API**: Native GatewayClass/Gateway/HTTPRoute support with per-route annotations
 
 ## Install
 
@@ -134,7 +134,7 @@ cfgate automatically:
 
 ### CloudflareTunnel
 
-Manages tunnel lifecycle and cloudflared deployment. Zone-agnostic -- a single tunnel can serve any number of domains.
+Manages tunnel lifecycle and cloudflared deployment. Zone-agnostic: a single tunnel can serve any number of domains.
 
 | Field | Description |
 |-------|-------------|
@@ -243,7 +243,7 @@ Per-route configuration via annotations on Gateway API routes:
 
 ## Multi-Zone Support
 
-cfgate natively supports multiple zones and domains. cloudflared is zone-agnostic -- it connects via tunnel UUID and routes any hostname that resolves to the tunnel domain. Zone management is handled entirely by the CloudflareDNS CRD:
+cfgate natively supports multiple zones and domains. cloudflared is zone-agnostic: it connects via tunnel UUID and routes any hostname that resolves to the tunnel domain. Zone management is handled entirely by the CloudflareDNS CRD:
 
 ```yaml
 spec:
@@ -306,6 +306,8 @@ See the [Kiali CR Reference](https://kiali.io/docs/configuration/kialis.kiali.io
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, secrets configuration, and contribution guidelines.
 
 See [docs/TESTING.md](docs/TESTING.md) for E2E test strategy, environment variables, and test execution.
+
+See [CHANGELOG.md](CHANGELOG.md) for release history (generated via [git-cliff](https://git-cliff.org/)).
 
 ```bash
 brew install mise
