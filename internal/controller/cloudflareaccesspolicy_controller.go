@@ -378,51 +378,119 @@ func (r *CloudflareAccessPolicyReconciler) inheritCredentialsFromTunnel(
 		refs = append([]cfgatev1alpha1.PolicyTargetReference{*policy.Spec.TargetRef}, refs...)
 	}
 
-	// Find tunnels referenced by target Gateways
+	// Find tunnels referenced by target Gateways or HTTPRoutes
 	for _, ref := range refs {
-		if ref.Kind != "Gateway" {
-			continue
-		}
+		if ref.Kind == "Gateway" {
+			namespace := policy.Namespace
+			if ref.Namespace != nil {
+				namespace = *ref.Namespace
+			}
 
-		namespace := policy.Namespace
-		if ref.Namespace != nil {
-			namespace = *ref.Namespace
-		}
+			var gw gateway.Gateway
+			if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, &gw); err != nil {
+				continue
+			}
 
-		var gw gateway.Gateway
-		if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, &gw); err != nil {
-			continue
-		}
+			tunnelRef, ok := gw.Annotations[annotations.AnnotationTunnelRef]
+			if !ok {
+				continue
+			}
 
-		tunnelRef, ok := gw.Annotations[annotations.AnnotationTunnelRef]
-		if !ok {
-			continue
-		}
+			// Parse namespace/name
+			parts := strings.SplitN(tunnelRef, "/", 2)
+			var tunnelNS, tunnelName string
+			if len(parts) == 2 {
+				tunnelNS, tunnelName = parts[0], parts[1]
+			} else {
+				tunnelNS, tunnelName = gw.Namespace, parts[0]
+			}
 
-		// Parse namespace/name
-		parts := strings.SplitN(tunnelRef, "/", 2)
-		var tunnelNS, tunnelName string
-		if len(parts) == 2 {
-			tunnelNS, tunnelName = parts[0], parts[1]
-		} else {
-			tunnelNS, tunnelName = gw.Namespace, parts[0]
-		}
+			var tunnel cfgatev1alpha1.CloudflareTunnel
+			if err := r.Get(ctx, types.NamespacedName{Namespace: tunnelNS, Name: tunnelName}, &tunnel); err != nil {
+				log.V(1).Info("failed to get tunnel for credential inheritance",
+					"tunnel", tunnelNS+"/"+tunnelName,
+					"error", err.Error(),
+				)
+				continue
+			}
 
-		var tunnel cfgatev1alpha1.CloudflareTunnel
-		if err := r.Get(ctx, types.NamespacedName{Namespace: tunnelNS, Name: tunnelName}, &tunnel); err != nil {
-			log.V(1).Info("failed to get tunnel for credential inheritance",
-				"tunnel", tunnelNS+"/"+tunnelName,
-				"error", err.Error(),
-			)
-			continue
-		}
+			// Found tunnel - inherit credentials
+			return &cfgatev1alpha1.CloudflareSecretRef{
+				Name:      tunnel.Spec.Cloudflare.SecretRef.Name,
+				Namespace: ptr.To(tunnel.Namespace),
+				AccountID: tunnel.Spec.Cloudflare.AccountID,
+			}, tunnel.Spec.Cloudflare.AccountID, nil
 
-		// Found tunnel - inherit credentials
-		return &cfgatev1alpha1.CloudflareSecretRef{
-			Name:      tunnel.Spec.Cloudflare.SecretRef.Name,
-			Namespace: ptr.To(tunnel.Namespace),
-			AccountID: tunnel.Spec.Cloudflare.AccountID,
-		}, tunnel.Spec.Cloudflare.AccountID, nil
+		} else if ref.Kind == "HTTPRoute" {
+			// Walk HTTPRoute → parentRef → Gateway → tunnel
+			namespace := policy.Namespace
+			if ref.Namespace != nil {
+				namespace = *ref.Namespace
+			}
+
+			var route gateway.HTTPRoute
+			if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, &route); err != nil {
+				continue
+			}
+
+			// Walk parent refs to find a cfgate Gateway
+			for _, parentRef := range route.Spec.ParentRefs {
+				// Default kind is Gateway per Gateway API spec
+				if parentRef.Kind != nil && *parentRef.Kind != "Gateway" {
+					continue
+				}
+
+				gwNamespace := route.Namespace
+				if parentRef.Namespace != nil {
+					gwNamespace = string(*parentRef.Namespace)
+				}
+
+				var gw gateway.Gateway
+				if err := r.Get(ctx, types.NamespacedName{Namespace: gwNamespace, Name: string(parentRef.Name)}, &gw); err != nil {
+					continue
+				}
+
+				// Check if this is a cfgate-managed Gateway
+				var gc gateway.GatewayClass
+				if err := r.Get(ctx, types.NamespacedName{Name: string(gw.Spec.GatewayClassName)}, &gc); err != nil {
+					continue
+				}
+				if string(gc.Spec.ControllerName) != GatewayControllerName {
+					continue
+				}
+
+				// Found cfgate Gateway — resolve tunnel credentials
+				tunnelRef, ok := gw.Annotations[annotations.AnnotationTunnelRef]
+				if !ok {
+					continue
+				}
+
+				parts := strings.SplitN(tunnelRef, "/", 2)
+				var tunnelNS, tunnelName string
+				if len(parts) == 2 {
+					tunnelNS, tunnelName = parts[0], parts[1]
+				} else {
+					tunnelNS, tunnelName = gw.Namespace, parts[0]
+				}
+
+				var tunnel cfgatev1alpha1.CloudflareTunnel
+				if err := r.Get(ctx, types.NamespacedName{Namespace: tunnelNS, Name: tunnelName}, &tunnel); err != nil {
+					log.V(1).Info("failed to get tunnel for credential inheritance via HTTPRoute",
+						"httproute", namespace+"/"+ref.Name,
+						"gateway", gwNamespace+"/"+string(parentRef.Name),
+						"tunnel", tunnelNS+"/"+tunnelName,
+						"error", err.Error(),
+					)
+					continue
+				}
+
+				return &cfgatev1alpha1.CloudflareSecretRef{
+					Name:      tunnel.Spec.Cloudflare.SecretRef.Name,
+					Namespace: ptr.To(tunnel.Namespace),
+					AccountID: tunnel.Spec.Cloudflare.AccountID,
+				}, tunnel.Spec.Cloudflare.AccountID, nil
+			}
+		}
 	}
 
 	return nil, "", nil

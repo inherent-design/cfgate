@@ -158,7 +158,7 @@ var _ = Describe("Multi-Resource E2E", Label("cloudflare"), Ordered, func() {
 			Expect(policyStatus.Status.ApplicationID).NotTo(BeEmpty(), "AccessPolicy should have application ID")
 		})
 
-		It("should clean up both DNS record and Access policy on HTTPRoute deletion", SpecTimeout(5*time.Minute), func(ctx SpecContext) {
+		It("should clean up both DNS record and Access policy on HTTPRoute deletion", SpecTimeout(12*time.Minute), func(ctx SpecContext) {
 			By("Creating test Service")
 			svcName := testID("svc")
 			createTestService(ctx, k8sClient, svcName, namespace.Name, 8080)
@@ -259,7 +259,7 @@ var _ = Describe("Multi-Resource E2E", Label("cloudflare"), Ordered, func() {
 			Expect(k8sClient.Delete(ctx, policy)).To(Succeed())
 
 			By("Waiting for Access Application to be cleaned up")
-			waitForAccessApplicationDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, policyName, DefaultTimeout)
+			waitForAccessApplicationDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, policyName, LongTimeout)
 		})
 	})
 

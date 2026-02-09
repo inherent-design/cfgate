@@ -122,16 +122,19 @@ func (r *HTTPRouteReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	// 5. Resolve backend Services
 	resolvedRefsCondition := r.resolveBackends(ctx, &route)
 
-	// 6. Resolve access policy reference
-	accessPolicyCondition := r.resolveAccessPolicy(ctx, &route)
+	// 6. Resolve access policy reference (condition omitted when annotation absent)
+	accessPolicyCondition, hasAccessPolicy := r.resolveAccessPolicy(ctx, &route)
 
 	// 7. Update route status - merge conditions into each cfgate parent status,
 	// then combine with preserved entries from other controllers.
 	for i := range cfgateParentStatuses {
+		conditions := []metav1.Condition{resolvedRefsCondition}
+		if hasAccessPolicy {
+			conditions = append(conditions, accessPolicyCondition)
+		}
 		cfgateParentStatuses[i].Conditions = status.MergeConditions(
 			cfgateParentStatuses[i].Conditions,
-			resolvedRefsCondition,
-			accessPolicyCondition,
+			conditions...,
 		)
 	}
 	route.Status.Parents = append(preserved, cfgateParentStatuses...)
@@ -167,7 +170,7 @@ func (r *HTTPRouteReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gwapiv1.Gateway{},
 			handler.EnqueueRequestsFromMapFunc(r.findRoutesForGateway),
-			builder.WithPredicates(CfgateAnnotationOrGenerationPredicate),
+			builder.WithPredicates(CfgateAnnotationOrGenerationPredicate, GatewayCreateAnnotationFilter),
 		).
 		Watches(
 			&corev1.Service{},
@@ -524,24 +527,20 @@ func (r *HTTPRouteReconciler) resolveBackends(
 }
 
 // resolveAccessPolicy resolves the referenced CloudflareAccessPolicy.
-// Returns a condition indicating the resolution status.
-// If no access-policy annotation is present, returns a success condition.
+// Returns a condition indicating the resolution status and whether the condition
+// should be set. When no access-policy annotation is present, returns (zero, false)
+// so the caller omits the condition entirely — "not applicable" is best represented
+// by absence rather than a misleading True/False status.
 func (r *HTTPRouteReconciler) resolveAccessPolicy(
 	ctx context.Context,
 	route *gwapiv1.HTTPRoute,
-) metav1.Condition {
+) (metav1.Condition, bool) {
 	log := log.FromContext(ctx)
 
 	policyRef := annotations.GetAnnotation(route, annotations.AnnotationAccessPolicy)
 	if policyRef == "" {
-		// No access policy annotation - this is valid
-		return status.NewCondition(
-			"AccessPolicyResolved",
-			metav1.ConditionTrue,
-			"NoAccessPolicy",
-			"No access policy annotation present",
-			route.Generation,
-		)
+		// No access policy annotation — condition not applicable, omit entirely
+		return metav1.Condition{}, false
 	}
 
 	// Parse namespace/name format
@@ -566,7 +565,7 @@ func (r *HTTPRouteReconciler) resolveAccessPolicy(
 				"AccessPolicyNotFound",
 				fmt.Sprintf("CloudflareAccessPolicy %s/%s not found", policyNS, policyName),
 				route.Generation,
-			)
+			), true
 		}
 		log.Error(err, "failed to get CloudflareAccessPolicy")
 		return status.NewCondition(
@@ -575,7 +574,7 @@ func (r *HTTPRouteReconciler) resolveAccessPolicy(
 			"AccessPolicyError",
 			fmt.Sprintf("Failed to resolve CloudflareAccessPolicy: %v", err),
 			route.Generation,
-		)
+		), true
 	}
 
 	log.V(1).Info("resolved access policy",
@@ -591,7 +590,7 @@ func (r *HTTPRouteReconciler) resolveAccessPolicy(
 		"Resolved",
 		fmt.Sprintf("Resolved CloudflareAccessPolicy %s/%s", policyNS, policyName),
 		route.Generation,
-	)
+	), true
 }
 
 // parsePolicyRef parses a policy reference in "namespace/name" or "name" format.

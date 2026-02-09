@@ -7,6 +7,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
+	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
 	"cfgate.io/cfgate/internal/controller/annotations"
 )
 
@@ -77,6 +78,56 @@ var GenerationOrDeletionPredicate = predicate.Or(
 		},
 	},
 )
+
+// TunnelIDChangedPredicate filters CloudflareTunnel events to only those where
+// Status.TunnelID has changed. This is used by GatewayReconciler to detect when
+// a tunnel has been created/adopted and the TunnelID becomes available.
+var TunnelIDChangedPredicate = predicate.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool {
+		// Pass Creates — a new tunnel with TunnelID already set needs processing
+		tunnel, ok := e.Object.(*cfgatev1alpha1.CloudflareTunnel)
+		if !ok {
+			return false
+		}
+		return tunnel.Status.TunnelID != ""
+	},
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldTunnel, ok := e.ObjectOld.(*cfgatev1alpha1.CloudflareTunnel)
+		if !ok {
+			return false
+		}
+		newTunnel, ok := e.ObjectNew.(*cfgatev1alpha1.CloudflareTunnel)
+		if !ok {
+			return false
+		}
+		return oldTunnel.Status.TunnelID != newTunnel.Status.TunnelID
+	},
+	DeleteFunc: func(e event.DeleteEvent) bool {
+		return false // Gateway doesn't need to react to tunnel deletion
+	},
+}
+
+// GatewayCreateAnnotationFilter rejects Gateway Create events that lack cfgate
+// annotations. Use this on Gateway watches (AND-combined with CfgateAnnotationOrGenerationPredicate)
+// to prevent "poisoned first reconcile" where a bare Gateway Create triggers
+// unnecessary reconciliation that finds 0 hostnames.
+//
+// This predicate only filters Create events. Update, Delete, and Generic events
+// pass through unconditionally. This ensures annotation-add Updates still trigger
+// reconciliation normally.
+var GatewayCreateAnnotationFilter = predicate.Funcs{
+	CreateFunc: func(e event.CreateEvent) bool {
+		for k := range e.Object.GetAnnotations() {
+			if strings.HasPrefix(k, annotations.AnnotationPrefix) {
+				return true
+			}
+		}
+		return false
+	},
+	UpdateFunc:  func(e event.UpdateEvent) bool { return true },
+	DeleteFunc:  func(e event.DeleteEvent) bool { return true },
+	GenericFunc: func(e event.GenericEvent) bool { return true },
+}
 
 // cfgateAnnotationsChanged returns true if any cfgate.io/* prefixed annotation
 // was added, removed, or had its value changed between old and new.

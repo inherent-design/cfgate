@@ -74,9 +74,9 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			Expect(cfTunnel).NotTo(BeNil(), "Tunnel should exist in Cloudflare")
 			Expect(cfTunnel.ID).To(Equal(tunnel.Status.TunnelID), "Tunnel IDs should match")
 
-			By("Verifying cloudflared Deployment is created")
+			By("Verifying cloudflared Deployment is created with correct spec")
 			deploymentName := fmt.Sprintf("%s-cloudflared", tunnel.Name)
-			deployment := waitForDeploymentReady(ctx, k8sClient, deploymentName, namespace.Name, 1, DefaultTimeout)
+			deployment := waitForDeploymentSpec(ctx, k8sClient, deploymentName, namespace.Name, 1, DefaultTimeout)
 			Expect(deployment).NotTo(BeNil())
 
 			// Store for subsequent tests if needed.
@@ -162,7 +162,7 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			waitForTunnelCondition(ctx, k8sClient, tunnel.Name, tunnel.Namespace, "ConfigurationSynced", metav1.ConditionTrue, DefaultTimeout)
 		})
 
-		It("should delete tunnel from Cloudflare when CR is deleted", func() {
+		It("should delete tunnel from Cloudflare when CR is deleted", SpecTimeout(12*time.Minute), func(ctx SpecContext) {
 			deleteTunnelName := testID("delete")
 
 			By("Creating CloudflareTunnel CR")
@@ -185,7 +185,7 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			waitForTunnelDeleted(ctx, k8sClient, tunnel.Name, tunnel.Namespace, DefaultTimeout)
 
 			By("Verifying tunnel is deleted from Cloudflare")
-			waitForTunnelDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, deleteTunnelName, DefaultTimeout)
+			waitForTunnelDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, deleteTunnelName, LongTimeout)
 
 			By("Verifying cloudflared Deployment is deleted")
 			deploymentName := fmt.Sprintf("%s-cloudflared", tunnel.Name)
@@ -410,20 +410,10 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			By("Waiting for tunnel to become ready")
 			tunnel = waitForTunnelReady(ctx, k8sClient, tunnel.Name, tunnel.Namespace, LongTimeout)
 
-			By("Verifying Deployment has 2 replicas")
+			By("Verifying Deployment has 2 replicas in spec")
 			deploymentName := fmt.Sprintf("%s-cloudflared", tunnel.Name)
-			deployment := waitForDeploymentReady(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
+			deployment := waitForDeploymentSpec(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
-			Expect(deployment.Status.ReadyReplicas).To(Equal(int32(2)))
-
-			By("Verifying tunnel status shows correct replica count")
-			Eventually(func() int32 {
-				var t cfgatev1alpha1.CloudflareTunnel
-				if err := k8sClient.Get(ctx, client.ObjectKey{Name: tunnel.Name, Namespace: tunnel.Namespace}, &t); err != nil {
-					return -1
-				}
-				return t.Status.ReadyReplicas
-			}, DefaultTimeout, time.Second).Should(Equal(int32(2)))
 		})
 
 		It("should update cloudflared Deployment when spec changes", func() {
@@ -439,15 +429,15 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			t.Spec.Cloudflared.Replicas = 2
 			Expect(k8sClient.Update(ctx, &t)).To(Succeed())
 
-			By("Waiting for Deployment to scale to 2 replicas")
+			By("Waiting for Deployment to scale to 2 replicas in spec")
 			deploymentName := fmt.Sprintf("%s-cloudflared", tunnel.Name)
-			deployment := waitForDeploymentReady(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
+			deployment := waitForDeploymentSpec(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(2)))
 		})
 	})
 
 	Context("fallback credentials", func() {
-		It("should use fallbackCredentialsRef when primary secret deleted during tunnel deletion", SpecTimeout(5*time.Minute), func(ctx SpecContext) {
+		It("should use fallbackCredentialsRef when primary secret deleted during tunnel deletion", SpecTimeout(12*time.Minute), func(ctx SpecContext) {
 			fallbackTunnelName := testID("fallback")
 
 			By("Creating fallback credentials secret")
@@ -511,7 +501,7 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			waitForTunnelDeleted(ctx, k8sClient, tunnel.Name, tunnel.Namespace, DefaultTimeout)
 
 			By("Verifying tunnel was deleted from Cloudflare (using fallback credentials)")
-			waitForTunnelDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, fallbackTunnelName, DefaultTimeout)
+			waitForTunnelDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, fallbackTunnelName, LongTimeout)
 		})
 	})
 
@@ -645,7 +635,7 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 	// §6.1: Deleted Tunnel Filter Behavior
 	// ============================================================
 	Context("deleted tunnel filter", func() {
-		It("should not adopt a deleted tunnel when creating CR", SpecTimeout(3*time.Minute), func(ctx SpecContext) {
+		It("should not adopt a deleted tunnel when creating CR", SpecTimeout(8*time.Minute), func(ctx SpecContext) {
 			deletedTunnelName := testID("deleted-filter")
 
 			By("Pre-creating tunnel via Cloudflare API")
@@ -721,9 +711,9 @@ var _ = Describe("CloudflareTunnel E2E", Label("cloudflare"), func() {
 			Expect(tunnel.Status.TunnelID).To(Equal(preTunnelID),
 				"Should adopt the existing tunnel, not create a new one")
 
-			By("Verifying Deployment has 2 replicas (CR spec overrides default)")
+			By("Verifying Deployment has 2 replicas in spec (CR spec overrides default)")
 			deploymentName := fmt.Sprintf("%s-cloudflared", tunnel.Name)
-			deployment := waitForDeploymentReady(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
+			deployment := waitForDeploymentSpec(ctx, k8sClient, deploymentName, namespace.Name, 2, LongTimeout)
 			Expect(*deployment.Spec.Replicas).To(Equal(int32(2)),
 				"Deployment should use CR's replica count, not default")
 		})

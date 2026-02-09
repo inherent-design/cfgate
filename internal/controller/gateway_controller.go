@@ -16,8 +16,10 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	cfgatev1alpha1 "cfgate.io/cfgate/api/v1alpha1"
@@ -131,6 +133,11 @@ func (r *GatewayReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&gwapiv1.Gateway{},
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
+		Watches(
+			&cfgatev1alpha1.CloudflareTunnel{},
+			handler.EnqueueRequestsFromMapFunc(r.findGatewaysForTunnel),
+			builder.WithPredicates(TunnelIDChangedPredicate),
 		).
 		Complete(r)
 }
@@ -296,6 +303,36 @@ func ptrTo[T any](v T) *T {
 	return &v
 }
 
+// findGatewaysForTunnel maps a CloudflareTunnel to all Gateways that reference it
+// via the cfgate.io/tunnel-ref annotation. Used by the Tunnel watch to trigger
+// Gateway reconciliation when TunnelID becomes available.
+func (r *GatewayReconciler) findGatewaysForTunnel(ctx context.Context, obj client.Object) []reconcile.Request {
+	tunnel, ok := obj.(*cfgatev1alpha1.CloudflareTunnel)
+	if !ok {
+		return nil
+	}
+
+	tunnelRef := fmt.Sprintf("%s/%s", tunnel.Namespace, tunnel.Name)
+
+	var gateways gwapiv1.GatewayList
+	if err := r.List(ctx, &gateways); err != nil {
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for _, gw := range gateways.Items {
+		if gw.Annotations[annotations.AnnotationTunnelRef] == tunnelRef {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Namespace: gw.Namespace,
+					Name:      gw.Name,
+				},
+			})
+		}
+	}
+	return requests
+}
+
 // GatewayClassReconciler reconciles GatewayClass resources to set Accepted status.
 //
 // Per Gateway API spec (GEP-1364), controllers MUST set the Accepted condition on
@@ -320,8 +357,9 @@ type GatewayClassReconciler struct {
 //  4. Update status subresource
 //
 // Non-matching GatewayClasses are ignored (another controller owns them).
-// No periodic requeue is needed; watch events are sufficient since GatewayClass
-// changes are rare.
+// Periodic requeue (5m) provides self-healing: if a status update is lost due to
+// conflict or transient error, the controller will re-verify and restore the
+// Accepted condition on the next cycle.
 func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.FromContext(ctx).WithName("controller").WithName("gatewayclass").
 		WithValues("name", req.Name)
@@ -350,7 +388,7 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		existing.Reason == string(gwapiv1.GatewayClassReasonAccepted) &&
 		existing.ObservedGeneration == gc.Generation {
 		log.V(1).Info("GatewayClass already accepted, skipping status update")
-		return ctrl.Result{}, nil
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	// 4. Set Accepted=True
@@ -367,18 +405,22 @@ func (r *GatewayClassReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	}
 
 	log.Info("GatewayClass accepted")
-	return ctrl.Result{}, nil
+	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
 // SetupWithManager sets up the GatewayClass controller with the Manager.
 //
 // Watched resources:
-//   - GatewayClass (primary resource, no predicate needed since changes are rare)
+//   - GatewayClass (primary resource, with GenerationChangedPredicate)
 //
 // GatewayClass is cluster-scoped. This is a separate controller from GatewayReconciler
 // because GatewayClass and Gateway have different scoping and reconciliation needs.
 func (r *GatewayClassReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	log := mgr.GetLogger().WithName("controller").WithName("gatewayclass")
+	log.Info("registering controller with manager")
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&gwapiv1.GatewayClass{}).
+		For(&gwapiv1.GatewayClass{},
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
+		).
 		Complete(r)
 }

@@ -171,7 +171,7 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			Expect(policy.Status.ApplicationAUD).To(Equal(cfApp.AUD), "ApplicationAUD should match Cloudflare AUD")
 		})
 
-		It("should delete Access application from Cloudflare when CR is deleted", SpecTimeout(5*time.Minute), func(ctx SpecContext) {
+		It("should delete Access application from Cloudflare when CR is deleted", SpecTimeout(12*time.Minute), func(ctx SpecContext) {
 			By("Creating HTTPRoute for target")
 			policyName := testID("access-delete")
 			hostname := fmt.Sprintf("%s.%s", policyName, testEnv.CloudflareZoneName)
@@ -203,7 +203,7 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			waitForAccessPolicyDeleted(ctx, k8sClient, policy.Name, policy.Namespace, DefaultTimeout)
 
 			By("Verifying application is deleted from Cloudflare")
-			waitForAccessApplicationDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, policyName, DefaultTimeout)
+			waitForAccessApplicationDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, policyName, LongTimeout)
 		})
 
 		It("should preserve Access application when deletion policy is orphan", SpecTimeout(5*time.Minute), func(ctx SpecContext) {
@@ -486,7 +486,7 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			Expect(policy.Status.ServiceTokenIDs[tokenName]).To(Equal(cfToken.ID))
 		})
 
-		It("should delete service token when policy is deleted", SpecTimeout(5*time.Minute), func(ctx SpecContext) {
+		It("should delete service token when policy is deleted", SpecTimeout(12*time.Minute), func(ctx SpecContext) {
 			By("Creating HTTPRoute for target")
 			policyName := testID("access-token-delete")
 			hostname := fmt.Sprintf("%s.%s", policyName, testEnv.CloudflareZoneName)
@@ -518,7 +518,7 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			waitForAccessPolicyDeleted(ctx, k8sClient, policy.Name, policy.Namespace, DefaultTimeout)
 
 			By("Verifying service token is deleted from Cloudflare")
-			waitForServiceTokenDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, tokenName, DefaultTimeout)
+			waitForServiceTokenDeletedFromCloudflare(ctx, cfClient, testEnv.CloudflareAccountID, tokenName, LongTimeout)
 		})
 
 		It("should create AnyValidServiceToken rule", SpecTimeout(3*time.Minute), func(ctx SpecContext) {

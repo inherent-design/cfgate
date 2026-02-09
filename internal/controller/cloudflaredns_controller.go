@@ -93,6 +93,12 @@ type CloudflareDNSReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
+	// APIReader provides uncached reads to avoid informer cache staleness
+	// during hostname collection. Without this, r.List() may return stale
+	// Gateway data when the annotation-add event that triggered reconciliation
+	// hasn't propagated to the informer cache yet.
+	APIReader client.Reader
+
 	// CFClient is the Cloudflare API client. Injected for testing.
 	CFClient cloudflare.Client
 
@@ -171,6 +177,27 @@ func (r *CloudflareDNSReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if err != nil {
 		logger.Error(err, "failed to collect hostnames")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// If gatewayRoutes is enabled but 0 hostnames found, this may indicate
+	// a timing gap where relevant Gateways/HTTPRoutes haven't stabilized yet.
+	// Short requeue to self-heal rather than proceeding with empty state.
+	if dns.Spec.Source.GatewayRoutes.Enabled && len(hostnames) == 0 && len(dns.Spec.Source.Explicit) == 0 {
+		logger.Info("no hostnames discovered with gatewayRoutes enabled, requeueing",
+			"requeueAfter", "10s",
+		)
+		r.setCondition(&dns, status.ConditionTypeRecordsSynced, metav1.ConditionUnknown,
+			"NoHostnamesDiscovered",
+			"Gateway routes enabled but no hostnames found yet; retrying",
+		)
+		r.setCondition(&dns, status.ConditionTypeReady, metav1.ConditionUnknown,
+			"NoHostnamesDiscovered",
+			"Waiting for hostname discovery from gateway routes",
+		)
+		if updateErr := r.updateStatus(ctx, &dns); updateErr != nil {
+			logger.Error(updateErr, "failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	// 5. Get Cloudflare client
@@ -253,6 +280,8 @@ func (r *CloudflareDNSReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := mgr.GetLogger().WithName("controller").WithName("dns")
 	log.Info("registering controller with manager")
 
+	r.APIReader = mgr.GetAPIReader()
+
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &cfgatev1alpha1.CloudflareDNS{}, dnsTunnelRefNameIndex, extractDNSTunnelRefName); err != nil {
 		return fmt.Errorf("failed to create tunnelRef.name index: %w", err)
 	}
@@ -278,7 +307,7 @@ func (r *CloudflareDNSReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&gateway.Gateway{},
 			handler.EnqueueRequestsFromMapFunc(r.findAffectedDNSByGateway),
-			builder.WithPredicates(CfgateAnnotationOrGenerationPredicate),
+			builder.WithPredicates(CfgateAnnotationOrGenerationPredicate, GatewayCreateAnnotationFilter),
 		).
 		Complete(r)
 }
@@ -466,7 +495,7 @@ func (r *CloudflareDNSReconciler) collectHostnamesFromRoutes(ctx context.Context
 
 	// Find Gateways that reference this tunnel
 	var gateways gateway.GatewayList
-	if err := r.List(ctx, &gateways); err != nil {
+	if err := r.APIReader.List(ctx, &gateways); err != nil {
 		return nil, fmt.Errorf("failed to list gateways: %w", err)
 	}
 
@@ -484,7 +513,7 @@ func (r *CloudflareDNSReconciler) collectHostnamesFromRoutes(ctx context.Context
 	// For each Gateway, find HTTPRoutes
 	for _, gw := range relevantGateways {
 		var routes gateway.HTTPRouteList
-		if err := r.List(ctx, &routes); err != nil {
+		if err := r.APIReader.List(ctx, &routes); err != nil {
 			return nil, fmt.Errorf("failed to list httproutes: %w", err)
 		}
 
