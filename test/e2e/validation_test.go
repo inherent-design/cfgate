@@ -214,12 +214,18 @@ var _ = Describe("CEL Validation E2E", func() {
 
 			By("Cleaning up created policy")
 			// Remove finalizers if any were added, then delete.
-			var created cfgatev1alpha1.CloudflareAccessPolicy
-			Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(policy), &created)).To(Succeed())
-			if len(created.Finalizers) > 0 {
-				created.Finalizers = nil
-				Expect(k8sClient.Update(ctx, &created)).To(Succeed())
-			}
+			// Use Eventually to retry on conflict (controller may update status concurrently)
+			Eventually(func() error {
+				var created cfgatev1alpha1.CloudflareAccessPolicy
+				if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(policy), &created); err != nil {
+					return err
+				}
+				if len(created.Finalizers) > 0 {
+					created.Finalizers = nil
+					return k8sClient.Update(ctx, &created)
+				}
+				return nil
+			}, DefaultTimeout, DefaultInterval).Should(Succeed())
 			Expect(k8sClient.Delete(ctx, policy)).To(Succeed())
 		})
 	})

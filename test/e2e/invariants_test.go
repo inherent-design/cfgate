@@ -152,9 +152,11 @@ var _ = Describe("Invariants E2E", Label("cloudflare", "invariants"), Ordered, f
 			Expect(*deployment.Spec.Replicas).To(Equal(tunnel.Spec.Cloudflared.Replicas),
 				"Deployment replicas must match spec.cloudflared.replicas")
 
-			By("INV-T9: Tunnel config hash annotation must be present on Deployment pods")
-			Expect(deployment.Spec.Template.Annotations).To(HaveKey("cfgate.io/config-hash"),
-				"cloudflared pods must have config-hash annotation for rollout")
+			By("INV-T9: Tunnel config hash annotation must be present on CR")
+			// config-hash lives on the CloudflareTunnel CR (not the Deployment pod template).
+			// It gates redundant Cloudflare API UpdateConfiguration calls.
+			Expect(tunnel.Annotations).To(HaveKey("cfgate.io/config-hash"),
+				"CloudflareTunnel must have config-hash annotation after configuration sync")
 		})
 	})
 

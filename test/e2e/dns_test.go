@@ -523,13 +523,18 @@ var _ = Describe("CloudflareDNS E2E", Label("cloudflare"), Ordered, func() {
 				"DNS record should NOT be created when annotation filter doesn't match")
 
 			By("Patching HTTPRoute to add cfgate.io/dns-sync=enabled annotation")
-			var currentRoute gatewayv1.HTTPRoute
-			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, &currentRoute)).To(Succeed())
-			if currentRoute.Annotations == nil {
-				currentRoute.Annotations = make(map[string]string)
-			}
-			currentRoute.Annotations["cfgate.io/dns-sync"] = "enabled"
-			Expect(k8sClient.Update(ctx, &currentRoute)).To(Succeed())
+			// Use Eventually to retry on conflict (controller may update status concurrently)
+			Eventually(func() error {
+				var currentRoute gatewayv1.HTTPRoute
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: route.Name, Namespace: route.Namespace}, &currentRoute); err != nil {
+					return err
+				}
+				if currentRoute.Annotations == nil {
+					currentRoute.Annotations = make(map[string]string)
+				}
+				currentRoute.Annotations["cfgate.io/dns-sync"] = "enabled"
+				return k8sClient.Update(ctx, &currentRoute)
+			}, DefaultTimeout, DefaultInterval).Should(Succeed())
 
 			By("Verifying DNS records appear after annotation triggers reconciliation")
 			Eventually(func() bool {

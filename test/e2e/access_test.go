@@ -625,10 +625,15 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			initialGen := policy.Status.ObservedGeneration
 
 			By("Updating IP range in policy")
-			var updatedPolicy cfgatev1alpha1.CloudflareAccessPolicy
-			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: policyName, Namespace: namespace.Name}, &updatedPolicy)).To(Succeed())
-			updatedPolicy.Spec.Policies[0].Include[0].IP.Ranges = []string{"10.0.0.0/8", "172.16.0.0/12"}
-			Expect(k8sClient.Update(ctx, &updatedPolicy)).To(Succeed())
+			// Use Eventually to retry on conflict (controller may update status concurrently)
+			Eventually(func() error {
+				var updatedPolicy cfgatev1alpha1.CloudflareAccessPolicy
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: policyName, Namespace: namespace.Name}, &updatedPolicy); err != nil {
+					return err
+				}
+				updatedPolicy.Spec.Policies[0].Include[0].IP.Ranges = []string{"10.0.0.0/8", "172.16.0.0/12"}
+				return k8sClient.Update(ctx, &updatedPolicy)
+			}, DefaultTimeout, DefaultInterval).Should(Succeed())
 
 			By("Waiting for policy to be reconciled")
 			Eventually(func() int64 {
@@ -1050,10 +1055,15 @@ var _ = Describe("CloudflareAccessPolicy E2E", Label("cloudflare"), func() {
 			initialGen := policy.Status.ObservedGeneration
 
 			By("Updating policy name (triggering reconcile)")
-			var updatedPolicy cfgatev1alpha1.CloudflareAccessPolicy
-			Expect(k8sClient.Get(ctx, client.ObjectKey{Name: policyName, Namespace: namespace.Name}, &updatedPolicy)).To(Succeed())
-			updatedPolicy.Spec.Policies[0].Name = "updated-gsuite-group"
-			Expect(k8sClient.Update(ctx, &updatedPolicy)).To(Succeed())
+			// Use Eventually to retry on conflict (controller may update status concurrently)
+			Eventually(func() error {
+				var updatedPolicy cfgatev1alpha1.CloudflareAccessPolicy
+				if err := k8sClient.Get(ctx, client.ObjectKey{Name: policyName, Namespace: namespace.Name}, &updatedPolicy); err != nil {
+					return err
+				}
+				updatedPolicy.Spec.Policies[0].Name = "updated-gsuite-group"
+				return k8sClient.Update(ctx, &updatedPolicy)
+			}, DefaultTimeout, DefaultInterval).Should(Succeed())
 
 			By("Waiting for policy to be reconciled")
 			Eventually(func() int64 {

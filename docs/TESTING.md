@@ -7,7 +7,7 @@ cfgate uses an E2E-only test strategy. All tests run against the live Cloudflare
 - **Real API only.** Every test creates and verifies actual Cloudflare resources (tunnels, DNS records, Access applications, service tokens).
 - **E2E-only coverage.** Controller reconciliation patterns are incompatible with VCR/cassette approaches (attempted and removed). The controller runs in-process during tests against a real kind cluster.
 - **API state verification.** Tests verify that Kubernetes CRD state and Cloudflare API state converge correctly.
-- **94 specs across 6 test files.** Full lifecycle coverage for all CRDs, annotations, cross-resource interactions, CEL validation, and edge cases.
+- **111 specs across 7 test files.** Full lifecycle coverage for all CRDs, annotations, cross-resource interactions, CEL validation, structural invariants, and edge cases.
 
 ## Environment Variables
 
@@ -92,21 +92,30 @@ This runs the full suite with:
 
 ### Run Specific Tests
 
+Use the `e2e:filter` task (alias `fe2e`) to run a subset with `--focus`:
+
 ```bash
 # By CRD type
-ginkgo -vv --focus "CloudflareTunnel" ./test/e2e
-ginkgo -vv --focus "CloudflareDNS" ./test/e2e
-ginkgo -vv --focus "CloudflareAccessPolicy" ./test/e2e
+mise run fe2e "CloudflareTunnel"
+mise run fe2e "CloudflareDNS"
+mise run fe2e "CloudflareAccessPolicy"
+
+# Invariant tests
+mise run fe2e "Invariants"
+mise run fe2e "INV-T"
+mise run fe2e "deletion invariants"
 
 # Annotations
-ginkgo -vv --focus "HTTPRoute Annotations" ./test/e2e
+mise run fe2e "HTTPRoute Annotations"
 
 # Multi-CRD interactions
-ginkgo -vv --focus "Combined" ./test/e2e
+mise run fe2e "Combined"
 
 # CEL validation (no Cloudflare API needed)
-ginkgo -vv --focus "CEL Validation" ./test/e2e
+mise run fe2e "CEL Validation"
 ```
+
+The filter argument is a Ginkgo `--focus` regex. It is required.
 
 ### Adjust Parallelism
 
@@ -145,6 +154,7 @@ test/e2e/
   access_test.go        # CloudflareAccessPolicy rules and applications (26 specs)
   annotations_test.go   # HTTPRoute annotation parsing and propagation (16 specs)
   combined_test.go      # Multi-CRD interaction and cross-resource tests (7 specs)
+  invariants_test.go    # Structural invariants across all CRDs (7 specs, 45 assertions)
   validation_test.go    # CEL validation rules, no Cloudflare API needed (10 specs)
 ```
 
@@ -178,18 +188,33 @@ Typical timeouts:
 
 ### Conflict Retry (Eventually + Get/Update)
 
-When updating a resource that the controller may also be reconciling, use `Eventually` with a fresh `Get` inside the assertion to retry on conflict:
+When updating a resource that the controller may also be reconciling, wrap the Get/Update in `Eventually` to retry on 409 Conflict:
+
+```go
+// Use Eventually to retry on conflict (controller may update status concurrently)
+Eventually(func() error {
+    var current cfgatev1alpha1.CloudflareTunnel
+    if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(tunnel), &current); err != nil {
+        return err
+    }
+    current.Spec.Cloudflared.Image = "cloudflare/cloudflared:2025.1.0"
+    return k8sClient.Update(ctx, &current)
+}, DefaultTimeout, DefaultInterval).Should(Succeed())
+```
+
+The `func() error` form is the standard pattern for conflict retry. The fresh `Get` inside the loop fetches the latest `resourceVersion` on each attempt.
+
+For assertion-heavy waits (where you need multiple `Expect` calls), use the `func(g Gomega)` form instead:
 
 ```go
 Eventually(func(g Gomega) {
-    var current cfgatev1alpha1.CloudflareTunnel
-    g.Expect(k8sClient.Get(ctx, client.ObjectKeyFromObject(tunnel), &current)).To(Succeed())
-    current.Spec.Cloudflared.Image = "cloudflare/cloudflared:2025.1.0"
-    g.Expect(k8sClient.Update(ctx, &current)).To(Succeed())
-}).WithTimeout(30 * time.Second).WithPolling(time.Second).Should(Succeed())
+    var tunnel cfgatev1alpha1.CloudflareTunnel
+    g.Expect(k8sClient.Get(ctx, key, &tunnel)).To(Succeed())
+    g.Expect(tunnel.Status.TunnelID).NotTo(BeEmpty())
+}, DefaultTimeout, DefaultInterval).Should(Succeed())
 ```
 
-This pattern prevents test flakes from Kubernetes optimistic concurrency conflicts.
+Never use bare `Get` followed by `Expect(Update).To(Succeed())` -- the controller will race you.
 
 ### Wait Helpers
 
@@ -224,6 +249,25 @@ This pattern prevents test flakes from Kubernetes optimistic concurrency conflic
 | `createGateway` | Gateway with tunnel reference |
 | `createHTTPRoute` | HTTPRoute with hostname and backend |
 | `createTestService` | ClusterIP Service for backends |
+
+### Invariant Tests
+
+Invariant tests (`invariants_test.go`) verify structural properties that MUST hold whenever a resource reaches a known state. Unlike scenario tests ("do X, expect Y"), invariant tests verify "whenever state S holds, properties P1..Pn MUST hold" regardless of how the resource reached that state.
+
+Eight test contexts cover 45 assertions:
+
+| Context | IDs | What it verifies |
+|---------|-----|-----------------|
+| CloudflareTunnel Ready | INV-T1..T9 | Sub-conditions, TunnelID, TunnelDomain format, finalizer, deployment, config-hash |
+| CloudflareDNS Ready | INV-D1..D8 | Sub-conditions, SyncedRecords, ResolvedTarget, CF API CNAME, OwnershipVerified |
+| CloudflareAccessPolicy Ready | INV-A1..A8 | Sub-conditions, ApplicationID, targets, finalizer, CF API app |
+| Gateway status | INV-GW1..GW4 | Accepted, Programmed, addresses, supportedKinds |
+| HTTPRoute parent status | INV-HR1..HR3 | parents[] controllerName, Accepted, ResolvedRefs |
+| GatewayClass | INV-GC1..GC2 | controllerName match, Accepted |
+| Cross-CRD consistency | INV-X1..X3 | DNS/tunnel domain, CNAME content, credential inheritance chain |
+| Deletion cleanup | INV-DEL1..DEL4 | Namespace trigger, tunnel delete, DNS removal, Access app removal |
+
+The invariant test context is `Ordered` -- specs share a tunnel, GatewayClass, and Gateway. A failure in an early spec cascades to skip all subsequent specs in the context.
 
 ## Skipped Tests
 

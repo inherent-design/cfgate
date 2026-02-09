@@ -21,6 +21,7 @@ go = "1.25"
 #
 
 [tasks.codegen]
+alias = ["gen"]
 description = "Generate DeepCopy and CRD manifests"
 run = """
 controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./..."
@@ -29,11 +30,12 @@ controller-gen rbac:roleName=manager-role crd webhook paths="./..." output:crd:a
 
 [tasks.lint]
 description = "Run golangci-lint"
-run = "golangci-lint run"
+run = "golangci-lint -E ginkgolinter run"
 
 [tasks."lint:fix"]
+alias = ["fix"]
 description = "Run golangci-lint with auto-fix"
-run = "golangci-lint run --fix"
+run = "golangci-lint -E ginkgolinter run --fix"
 
 [tasks.format]
 alias = ["fmt"]
@@ -93,6 +95,23 @@ run = """
 echo "Running E2E tests against live Cloudflare API"
 mkdir -p out
 ginkgo -vv --procs=${E2E_PROCS:-4} --keep-going --silence-skips --poll-progress-after=15s \
+  --output-dir out \
+  --json-report=run.json \
+  --cover --covermode atomic --coverprofile coverage.out \
+  --race \
+  ./test/e2e
+"""
+
+[tasks."e2e:filter"]
+alias = ["fe2e"]
+description = "Run E2E tests with a Ginkgo --focus filter"
+usage = 'arg "filter" help="Ginkgo --focus regex"'
+env = { E2E_USE_EXISTING_CLUSTER = "true" }
+run = """
+echo "Running E2E tests with focus: {{arg(name='filter')}}"
+mkdir -p out
+ginkgo -vv --procs=${E2E_PROCS:-4} --keep-going --silence-skips --poll-progress-after=15s \
+  --focus="{{arg(name='filter')}}" \
   --output-dir out \
   --json-report=run.json \
   --cover --covermode atomic --coverprofile coverage.out \
