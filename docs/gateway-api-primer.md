@@ -90,24 +90,33 @@ Per-route behavior is configured via annotations on the Route resource. See [Ann
 
 The full chain from infrastructure to application routing:
 
-```
-GatewayClass                    Gateway                         HTTPRoute
-(cluster-scoped)                (namespace: cfgate-system)      (namespace: default)
-+-----------------------+       +-------------------------+     +---------------------+
-| controllerName:       |       | gatewayClassName: cfgate|     | parentRefs:         |
-| cfgate.io/cloudflare- |<------| annotations:            |<----| - name: cf-tunnel   |
-| tunnel-controller     |       |   tunnel-ref: .../tun   |     |   namespace: cfgate |
-+-----------------------+       | listeners:              |     | hostnames:          |
-                                |   - http/80/All         |     |   - app.example.com |
-                                +-------------------------+     | rules:              |
-                                         |                      |   - backendRefs:    |
-                                         v                      |     - my-svc:80     |
-                                +-------------------------+     +---------------------+
-                                | CloudflareTunnel        |
-                                | (namespace: cfgate-system)|
-                                | spec.tunnel.name: tun   |
-                                | spec.cloudflare: ...    |
-                                +-------------------------+
+```mermaid
+flowchart LR
+    HR["HTTPRoute
+    (namespace: default)
+    parentRefs: cf-tunnel
+    hostnames: app.example.com
+    backendRefs: my-svc:80"]
+
+    GW["Gateway
+    (namespace: cfgate-system)
+    gatewayClassName: cfgate
+    tunnel-ref: .../tun
+    listeners: http/80/All"]
+
+    GC["GatewayClass
+    (cluster-scoped)
+    controllerName:
+    cfgate.io/cloudflare-tunnel-controller"]
+
+    CT["CloudflareTunnel
+    (namespace: cfgate-system)
+    spec.tunnel.name: tun
+    spec.cloudflare: ..."]
+
+    HR -- parentRefs --> GW
+    GW -- gatewayClassName --> GC
+    GW -- tunnel-ref --> CT
 ```
 
 1. **GatewayClass** tells Kubernetes that cfgate handles Gateways with `controllerName: cfgate.io/cloudflare-tunnel-controller`.

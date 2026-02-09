@@ -182,19 +182,17 @@
 
 ### Credential Resolution Chain
 
-```
-CloudflareAccessPolicy
-  |
-  +-- spec.cloudflareRef set? --> Use explicit secret + accountID
-  |
-  +-- spec.targetRef/targetRefs[].kind == "Gateway"?
-  |     --> Gateway annotation cfgate.io/tunnel-ref
-  |           --> CloudflareTunnel.spec.cloudflare.secretRef
-  |
-  +-- spec.targetRef/targetRefs[].kind == "HTTPRoute"?
-        --> HTTPRoute.spec.parentRefs[]
-              --> Gateway annotation cfgate.io/tunnel-ref
-                    --> CloudflareTunnel.spec.cloudflare.secretRef
+```mermaid
+flowchart TD
+    CAP[CloudflareAccessPolicy]
+    CAP --> Q1{cloudflareRef set?}
+    Q1 -- Yes --> USE[Use explicit secret + accountID]
+    Q1 -- No --> Q2{target kind}
+    Q2 -- Gateway --> GW[Gateway cfgate.io/tunnel-ref]
+    GW --> CT1[CloudflareTunnel.spec.cloudflare.secretRef]
+    Q2 -- HTTPRoute --> HR[HTTPRoute.spec.parentRefs]
+    HR --> GW2[Gateway cfgate.io/tunnel-ref]
+    GW2 --> CT2[CloudflareTunnel.spec.cloudflare.secretRef]
 ```
 
 ### Common Causes
