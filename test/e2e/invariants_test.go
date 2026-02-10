@@ -769,6 +769,14 @@ var _ = Describe("Invariants E2E", Label("cloudflare", "invariants"), Ordered, f
 							{Hostname: hostname},
 						},
 					},
+					// FallbackCredentialsRef points to the shared namespace's credentials.
+					// During namespace deletion, the tunnel CR and its secret may be GC'd
+					// before the DNS finalizer runs. Without fallback, the DNS controller
+					// cannot authenticate to delete records, leaving them orphaned.
+					FallbackCredentialsRef: &cfgatev1alpha1.SecretReference{
+						Name:      "cloudflare-credentials",
+						Namespace: namespace.Name,
+					},
 				},
 			}
 			Expect(k8sClient.Create(ctx, dnsResource)).To(Succeed())
@@ -807,11 +815,10 @@ var _ = Describe("Invariants E2E", Label("cloudflare", "invariants"), Ordered, f
 				"Tunnel must be deleted from Cloudflare")
 
 			By("INV-DEL3: DNS record must be deleted from Cloudflare after finalizer runs")
-			// DNS API has 0.5-60s eventual consistency window for deletions.
 			Eventually(func() bool {
 				record, err := getDNSRecordFromCloudflare(ctx, cfClient, zoneID, hostname, "CNAME")
 				return err == nil && record == nil
-			}, 90*time.Second, DefaultInterval).Should(BeTrue(),
+			}, DefaultTimeout, DefaultInterval).Should(BeTrue(),
 				"DNS record must be deleted from Cloudflare")
 
 			By("INV-DEL4: Access Application must be deleted from Cloudflare after finalizer runs")
