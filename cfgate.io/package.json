@@ -1,42 +1,53 @@
 {
   "name": "cfgate-infra",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "https://cfgate.io",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {
     "dev": "wrangler dev",
-    "deploy:cf": "wrangler deploy",
+    "dev:site": "astro dev",
+    "build": "astro check && astro build",
+    "preview": "astro preview",
+    "check": "astro check",
+    "deploy:cf": "pnpm build && wrangler deploy",
     "format": "prettier --write .",
     "lint": "eslint --fix",
     "types": "wrangler types src/worker-configuration.d.ts",
-    "typecheck": "pnpm types && tsc --noEmit",
+    "typecheck": "pnpm types && astro check && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "tail": "wrangler tail",
     "tail:prod": "wrangler tail --env production",
-    "prepare": "pnpm types "
+    "prepare": "pnpm types"
   },
   "author": "inherent.design",
   "license": "Apache-2.0",
   "packageManager": "pnpm@10.28.2",
   "devDependencies": {
+    "@astrojs/check": "^0.9.6",
+    "@astrojs/ts-plugin": "^1.10.6",
     "@cloudflare/vitest-pool-workers": "^0.12.9",
     "@eslint/js": "^9.39.2",
+    "@tailwindcss/vite": "^4.1.18",
     "@types/node": "^25.2.0",
     "@vitest/runner": "^3.2.4",
     "@vitest/snapshot": "^3.2.4",
     "eslint": "^9.39.2",
+    "eslint-plugin-astro": "^1.5.0",
     "eslint-plugin-cflint": "^1.0.0",
     "globals": "^17.3.0",
     "jiti": "^2.6.1",
     "prettier": "^3.8.1",
+    "prettier-plugin-astro": "^0.14.1",
+    "tailwindcss": "^4.1.18",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.54.0",
     "vitest": "^3.2.4",
     "wrangler": "^4.63.0"
   },
   "dependencies": {
+    "astro": "6.0.0-beta.11",
     "hono": "^4.11.7"
   }
 }

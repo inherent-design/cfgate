@@ -1,2 +1,4 @@
 .wrangler
+.astro/
+dist/
 docs/

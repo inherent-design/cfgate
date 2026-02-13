@@ -1,9 +1,6 @@
 {
+  "extends": "astro/tsconfigs/strict",
   "compilerOptions": {
-    // Target & Module
-    "target": "es2024",
-    "module": "nodenext",
-    "moduleResolution": "node16",
     "lib": [
       "es2024",
       "ESNext.Array",
@@ -12,21 +9,21 @@
       "ESNext.Iterator",
       "ESNext.Promise"
     ],
-    // Types
     "types": ["@cloudflare/vitest-pool-workers", "node"],
-    // Strict mode
-    "strict": true,
+    "plugins": [
+      {
+        "name": "@astrojs/ts-plugin"
+      }
+    ],
     "noEmit": true,
     "declaration": true,
     "skipLibCheck": true,
-    // Module interop
     "isolatedModules": true,
     "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    // Additional features
     "resolveJsonModule": true
   },
-  "include": ["src", "tests"],
-  "exclude": ["node_modules", "docs"]
+  "include": [".astro/types.d.ts", "src"],
+  "exclude": ["node_modules", "dist"]
 }

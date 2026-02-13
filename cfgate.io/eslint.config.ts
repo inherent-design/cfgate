@@ -1,32 +1,36 @@
 import js from '@eslint/js'
 import { defineConfig } from 'eslint/config'
+import eslintPluginAstro from 'eslint-plugin-astro'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 
-export default defineConfig({
-  rules: {
-    'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
-  },
-  languageOptions: {
-    globals: {
-      ...globals.browser,
-      ...globals.node,
-      ...globals.serviceworker,
+export default defineConfig([
+  {
+    rules: {
+      'no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
     },
-    parser: tseslint.parser,
-    parserOptions: {
-      ecmaFeatures: {
-        impliedStrict: true,
+    languageOptions: {
+      globals: {
+        ...globals.browser,
+        ...globals.node,
+        ...globals.serviceworker,
       },
-      projectService: true,
-      sourceType: 'module',
+      parser: tseslint.parser,
+      parserOptions: {
+        ecmaFeatures: {
+          impliedStrict: true,
+        },
+        projectService: true,
+        sourceType: 'module',
+      },
     },
+    plugins: {
+      js: js,
+      tseslint: tseslint,
+    },
+    extends: [js.configs.recommended, tseslint.configs.stylisticTypeChecked],
+    files: ['src/**/*.ts'],
+    ignores: ['docs/**', 'node_modules/**', 'dist/**'],
   },
-  plugins: {
-    js: js,
-    tseslint: tseslint,
-  },
-  extends: [js.configs.recommended, tseslint.configs.stylisticTypeChecked],
-  files: ['src/**'],
-  ignores: ['docs/**', 'node_modules/**'],
-})
+  ...eslintPluginAstro.configs.recommended,
+])

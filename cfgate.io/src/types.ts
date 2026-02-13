@@ -7,6 +7,7 @@
  */
 export interface Bindings {
   ENVIRONMENT?: 'development' | 'staging' | 'production'
+  ASSETS?: Fetcher
 }
 
 /**

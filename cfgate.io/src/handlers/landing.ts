@@ -1,14 +1,13 @@
 import type { Context } from 'hono'
 import type { AppEnv } from '../types.js'
 
-/**
- * Landing page handler
- *
- * Returns simple "Hello World" for browser requests to root.
- * Future placeholder for SPA.
- */
-export function landingHandler(c: Context<AppEnv>): Response {
+export async function landingHandler(c: Context<AppEnv>): Promise<Response> {
   c.var.logCtx.handler = 'landing'
 
-  return c.text('Hello World')
+  if (c.env.ASSETS) {
+    const asset = await c.env.ASSETS.fetch(c.req.raw)
+    return new Response(asset.body, asset)
+  }
+
+  return c.text('cfgate', 200)
 }
