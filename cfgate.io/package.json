@@ -1,6 +1,6 @@
 {
   "name": "cfgate-infra",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "https://cfgate.io",
   "type": "module",
   "main": "src/index.ts",
@@ -47,7 +47,7 @@
     "wrangler": "^4.65.0"
   },
   "dependencies": {
-    "@inherent.design/brand": "^0.3.0",
+    "@inherent.design/brand": "^0.3.1",
     "@tabler/icons": "^3.36.1",
     "@tailwindcss/forms": "^0.5.11",
     "astro": "6.0.0-beta.11",
