@@ -7,7 +7,7 @@ const locale = Astro.currentLocale ?? 'en'
 const locales = [
   { code: 'en', label: 'en', href: '/' },
   { code: 'hi', label: 'hi', href: '/hi/' },
-  { code: 'zh', label: 'cn', href: '/zh/' },
+  { code: 'zh', label: 'zh', href: '/zh/' },
 ]
 
 const t: Record<string, { subtitle: string; description: string }> = {
@@ -20,8 +20,8 @@ const t: Record<string, { subtitle: string; description: string }> = {
     description: 'Kubernetes 原生 Cloudflare 管理。',
   },
   hi: {
-    subtitle: 'kubernetes-native cloudflare management.',
-    description: 'Kubernetes-native Cloudflare management.',
+    subtitle: 'cloudflare का प्रबंधन, kubernetes में।',
+    description: 'Kubernetes में Cloudflare का प्रबंधन।',
   },
 }
 
