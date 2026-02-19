@@ -1,3 +1,5 @@
+> ⚠️ MOVED: https://github.com/cfgate/cfgate
+
 # cfgate
 
 [![Latest Release](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat)](https://github.com/inherent-design/cfgate/releases/latest) [![Image](https://img.shields.io/github/v/release/inherent-design/cfgate?style=flat&label=image&logo=docker&logoColor=white&color=2496ED)](https://github.com/orgs/inherent-design/packages/container/package/cfgate) [![Helm Chart](https://img.shields.io/badge/chart-GHCR-0F1689?style=flat&logo=helm&logoColor=white)](https://github.com/orgs/inherent-design/packages/container/package/charts%2Fcfgate)
